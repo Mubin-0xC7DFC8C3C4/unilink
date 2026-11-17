@@ -68,7 +68,10 @@ function serverMessage(e: ApiError): string | undefined {
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status===401) return SESSION_EXPIRED_MESSAGE;
-    if (e.status===403) return 'You do not have permission to do that.';
+    // D-094: a restricted session answers 403 PASSWORD_CHANGE_REQUIRED —
+    // that is not a generic permission failure, so surface the server's
+    // message (it names the fix: change the password).
+    if (e.status===403) return e.code==='PASSWORD_CHANGE_REQUIRED' ? (e.message || 'You must change your password before continuing.') : 'You do not have permission to do that.';
     // A missing resource is a genuine not-found — never "the backend
     // endpoint is not available yet". That wording is reserved for the
     // EndpointUnavailable component, used only where an endpoint is

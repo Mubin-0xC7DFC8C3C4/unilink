@@ -38,7 +38,7 @@ public final class AuthDtos {
   public record DeleteAccountRequest(@NotBlank String password) {}
   public record UserDto(Long id, String fullName, String email, String phone, Long universityId, Long departmentId,
                         Long batchId, String studentId, String state, boolean phoneVerified, boolean emailVerified,
-                        LocalDateTime createdAt) {}
+                        LocalDateTime createdAt, boolean mustChangePassword) {}
   public record VerificationStatusDto(Long userId, String state, String requestStatus, Double ocrMatchScore,
                                       String ocrStatus, String rejectionReason) {}
 }

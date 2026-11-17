@@ -11,7 +11,9 @@ export default function Totp(){ const [code,setCode]=useState(''); const [recove
   const locState = (useLocation().state || {}) as { stage?: string; otpauthUrl?: string };
   const stage = locState.stage || 'NEEDS_TOTP'; const otpauthUrl = locState.otpauthUrl || '';
   const enrol=useMutation({ mutationFn: ()=>apiPost<{status?:string; recoveryCodes?:string[]}>('/admin/auth/totp/enrol',{code}), onSuccess:(d)=>setRecoveryCodes(d.recoveryCodes||[]) });
-  const verify=useMutation({ mutationFn: ()=>apiPost<{adminId?:number; email?:string; role?:string}>('/admin/auth/totp/verify',{code}), onSuccess:(d)=>{ setUser({id:d.adminId, email:d.email, role:d.role}); nav('/admin'); } });
+  const verify=useMutation({ mutationFn: ()=>apiPost<{adminId?:number; email?:string; role?:string; mustChangePassword?:boolean}>('/admin/auth/totp/verify',{code}), onSuccess:(d)=>{ setUser({id:d.adminId, email:d.email, role:d.role, mustChangePassword: d.mustChangePassword===true}); // D-094/D-098: a temporary-password login goes to the admin
+    // change-password screen, not the dashboard (whose calls would 403).
+    nav(d.mustChangePassword ? '/admin/change-password' : '/admin'); } });
   const enrolled = recoveryCodes.length>0;
   return <div className="container" style={{maxWidth:480,paddingTop:48}}><PageHeader eyebrow="Admin Portal · Two-factor" title="TOTP verification" lead="Enter the 6-digit code from your authenticator app. First login: enrol TOTP and save your recovery codes. A recovery code also works as the verification code." />
   {stage==='NEEDS_ENROLMENT' && !enrolled && <>

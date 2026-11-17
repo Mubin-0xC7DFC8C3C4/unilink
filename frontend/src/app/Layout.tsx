@@ -1,10 +1,15 @@
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useTheme } from './ThemeContext';
 import { useAuth } from './auth';
 import { apiPost, errorMessage } from '../api/client';
 export function Layout(){
-  const { theme, toggle } = useTheme(); const { user, setUser } = useAuth(); const nav = useNavigate();
+  const { theme, toggle } = useTheme(); const { user, setUser } = useAuth(); const nav = useNavigate(); const loc = useLocation();
+  // D-094/D-098: a restored session can also carry mustChangePassword (the
+  // flag is reported by /me). Redirect to Settings — which holds the
+  // change-password form — from anywhere else, so the user never sits on
+  // a page whose calls all 403. Settings itself is exempt (no loop).
+  useEffect(()=>{ if (user?.mustChangePassword && loc.pathname !== '/settings') nav('/settings', { replace: true }); }, [user?.mustChangePassword, loc.pathname]);
   const [logoutError, setLogoutError] = useState<string|null>(null);
   // A failed sign-out is surfaced, not swallowed: the local session is
   // still cleared (the user asked to leave) but the failure is shown so

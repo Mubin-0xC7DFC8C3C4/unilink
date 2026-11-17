@@ -354,3 +354,556 @@ See `docs/phase-reports/01-addendum.md` for the full verification. D-072 to D-07
 
 ### D-092 EducationEntry/Achievement year column quoted in the entity (ADOPTED for v1.0)
 - `year` is a reserved word in H2, so unquoted DDL/DML fails under H2; the entities now use `@Column(name="\"year\"")`. MySQL renders it backticked to the same column, and no migration was rewritten. This is a test-environment accommodation only, recorded so a future reader does not "simplify" it away.
+### D-093 Admin password-change endpoint (ADOPTED)
+- New endpoint `POST /api/admin/auth/change-password` (`AdminAuthController.java`,
+  service `AdminAuthService.changePassword`): authenticated admin only, and
+  MFA-verified only (the controller rejects a merely password-authenticated
+  principal with 403). Body `{oldPassword, newPassword}` (reuses the student
+  `ChangePasswordRequest`); new password at least 12 characters (D-031 rule),
+  must differ from the current password (`SAME_PASSWORD`), wrong current
+  password is `INVALID_CREDENTIALS`. Success clears the must-change flag and
+  any temporary-password expiry, invalidates all sessions for the account
+  (D-013), is audited as `ADMIN_PASSWORD_CHANGED`, and the caller must log in
+  again. No such endpoint existed (audit I-16, Phase 2 closure note).
+- The admin rule is length-only (≥12), matching `createModerator`; the
+  student rule (≥8 with upper/lower/digit, FR-AUTH-03) is not imposed on
+  admins, and no new composition rule was invented.
+
+### D-094 Mandatory password change after an admin reset (ADOPTED)
+- Flag `must_change_password` on `user_credentials` and `admin_accounts`
+  (V010, D-097). Set by both issuers: moderator credential reset
+  (`AdminService.resetModeratorCredentials`) and `FORCE_RESET`
+  (`AdminService.changeUserState`). The initial password set by
+  `createModerator` is NOT flagged — it is chosen by the Platform Admin at
+  creation, not a generated temporary password; flagging it is a possible
+  follow-up, not part of this change.
+- Enforcement mechanism: a session attribute `MUST_CHANGE_PASSWORD`, set at
+  login (student `AuthController.login`, admin `AdminAuthController.login`
+  and after TOTP/email-OTP verification) and checked by
+  `MustChangePasswordFilter` (a `OncePerRequestFilter` registered in both
+  security chains). A flagged session gets 403 `PASSWORD_CHANGE_REQUIRED`
+  on every API call except the escape hatches: login, change-password,
+  logout, session restore (`/me`, so the frontend learns the flag after a
+  reload), CSRF priming, the health probe, the admin TOTP/email-OTP steps,
+  and password-reset request/confirm. WebSocket (`/ws`) is blocked.
+- Why a session attribute, not a principal field: no serialised principal
+  shape changes; the restriction cannot outlive the session that created
+  it; changing the password invalidates the session, which clears it. The
+  flag is also returned on login and on `/me` (student `UserDto`, admin
+  `principalDto`) so the frontend can redirect.
+- Why the admin change-password endpoint additionally requires MFA: the
+  filter allowlists the TOTP steps for a flagged session, so a holder of a
+  temporary password must still pass the second factor before turning it
+  into a persistent password. A temporary password alone can never change
+  itself into a persistent credential.
+- The student change-password endpoint already existed and is reused
+  unchanged, except that it (and password-reset confirm) now clears the
+  flag and any temporary-password expiry.
+
+### D-095 Temporary passwords expire after 24 hours (ADOPTED)
+- `temp_password_expires_at` on `user_credentials` and `admin_accounts`
+  (V010). Both issuers set it to issue time + 24 h
+  (`AuthService.TEMP_PASSWORD_VALIDITY`, shared so every issuer uses the
+  same window). Covers the moderator-reset temporary password and the
+  `FORCE_RESET` temporary password.
+- Enforcement at login (student `AuthService.login`, admin
+  `AdminAuthService.login`): authentication runs first, so a wrong password
+  still yields the generic `INVALID_CREDENTIALS`; a correct but expired
+  temporary password yields 400 `TEMP_PASSWORD_EXPIRED` with the message
+  "Your temporary password has expired. Ask an administrator to issue a new
+  one." (admin wording: "Ask a Platform Admin to issue new credentials.").
+  An expired login is neither a throttle success nor a wrong-password
+  failure, so it moves neither the success reset nor the lockout count.
+  The admin must re-issue; there is no self-service renewal.
+- A password change (either change-password endpoint, or password-reset
+  confirm) clears the expiry. An already-logged-in session whose temporary
+  password expires mid-session is NOT cut off by expiry alone — the
+  change-password call itself still accepts the expired temporary password
+  as the old password, because changing away from it is the desired
+  outcome; the must-change restriction (D-094) still applies to that
+  session until the change happens.
+
+### D-096 Recovery codes: salted Argon2id hashing, 90-day expiry, legacy codes invalidated (ADOPTED)
+- Storage: `AdminRecoveryCode.code_hash` now holds an Argon2id hash
+  produced by the existing `PasswordEncoder` (Argon2id, OWASP parameters,
+  D-014) instead of unsalted SHA-256. The column widens from `CHAR(64)` to
+  `VARCHAR(255)` in V010 (an Argon2id hash is ~97 chars).
+- Verification (`AdminAuthService.verifyTotpOrRecovery`): a code counts
+  only while unused and unexpired; single-use behaviour is unchanged
+  (used + `used_at` on success). Verification tries `encoder.matches`
+  against unused codes only.
+- Expiry policy: codes expire 90 days after enrolment
+  (`RECOVERY_CODE_VALIDITY`, `expires_at` set at enrolment) or on TOTP
+  re-enrolment, which deletes all prior codes. Pre-V010 rows have no
+  `expires_at`; they fall back to `created_at` + 90 days, and a row with
+  neither timestamp is treated as expired.
+- Pre-existing codes: **invalidated**. Their plaintext cannot be recovered
+  from unsalted SHA-256 hashes to re-hash, so they cannot be migrated. A
+  legacy row (64-char hex digest, no `$argon2` prefix) is skipped during
+  verification and can never match — the admin is not silently left on the
+  old scheme. Recovery path: the admin's TOTP still works (codes are only
+  the second-factor fallback); if TOTP is also lost, a Platform Admin
+  resets the credentials, which forces TOTP re-enrolment and issues fresh
+  Argon2id codes. The `"$argon2"` prefix guard also keeps
+  `encoder.matches` from throwing on a non-Argon2 hash.
+- Cost note: verification hashes each candidate with Argon2id (up to 10
+  unused codes, ~50–100 ms each worst case). Acceptable for a login-time
+  second factor; no change made.
+
+### D-097 V010 migration contents (ADOPTED)
+- File `backend/src/main/resources/db/migration/V010__must_change_password_and_temp_expiry.sql`,
+  additive only; V001–V009 untouched:
+  `user_credentials` / `admin_accounts` gain `must_change_password
+  TINYINT(1) NOT NULL DEFAULT 0` and `temp_password_expires_at DATETIME(3)
+  NULL`; `admin_recovery_codes` gains `expires_at DATETIME(3) NULL` and
+  `code_hash` is widened to `VARCHAR(255)`. Existing rows get flag 0 and
+  null expiry/expires_at, i.e. no existing credential is force-expired or
+  force-flagged by the migration itself.
+- Live Flyway verification is impossible in this sandbox (Java→MySQL
+  interception, unchanged); the migration is proven the same way V008 was
+  — a static test (`MustChangePasswordMigrationTest`) asserting the
+  entities map the columns, V002/V003 never created them, and V010 adds
+  them. A genuine Flyway run against real MySQL is still required before
+  launch.
+
+### D-098 Frontend must-change redirect (ADOPTED)
+- Student: login response `mustChangePassword` redirects to `/settings`
+  (not `/feed`); `AuthProvider` restore carries the flag from `/me`, and
+  `Layout` redirects to `/settings` from any other page when the flag is
+  set (Settings itself is exempt, so there is no loop). `SettingsPage`
+  gains the change-password form the existing student endpoint never had
+  UI for, plus a must-change banner; success signs the user out to `/login`
+  (the server invalidates the session).
+- Admin: TOTP verify response `mustChangePassword` redirects to the new
+  `/admin/change-password` page (new `AdminChangePassword.tsx`, inside the
+  guarded admin section); `AdminLayout` redirects there on a restored
+  flagged session. The page posts to the new endpoint; success signs the
+  admin out to `/admin/login`.
+- `errorMessage` surfaces the server's message for 403
+  `PASSWORD_CHANGE_REQUIRED` instead of the generic "You do not have
+  permission" text. A 403 from a flagged session is a redirect cue, not a
+  permission failure; the 401 session-expired redirect is unchanged and
+  does not trigger for the change-password calls themselves (they are
+  `/auth/**` paths).
+
+### D-099 OTP resend cap is per phone as well as per user and per IP (ADOPTED for v1.0)
+- `POST /api/auth/otp/resend` now enforces three caps, all per hour:
+  5 per user, **5 per phone** (new), 10 per IP — plus the existing 60 s
+  cooldown per user. Caps unchanged from D-081 for user and IP.
+- Rationale: D-077 keeps soft phone uniqueness, so several accounts may
+  legitimately share one phone (family phone). Without a per-phone cap,
+  each of those accounts could resend 5/hour, so one phone could receive
+  an unbounded number of OTP SMS in an hour — an SMS-flooding / cost
+  vector against the victim holding that phone, and a way to brute-force
+  OTP guesses across accounts sharing the number. Audit I-17 requires
+  "rate-limit OTP sends per phone/IP".
+- Registration sends count towards the phone cap: `register()` seeds the
+  `otp-resend-phone:<phone>` bucket (best-effort, return value ignored,
+  exactly like the existing per-user seed). Registration itself is never
+  blocked by the cap — a shared family phone must still be able to sign
+  up; only repeat sends are throttled.
+- The phone key is the stored canonical phone (`01[3-9]xxxxxxxx`, D-082),
+  so the cap cannot be dodged by re-formatting the number. A null/blank
+  phone (defensive; registration requires one) simply skips the phone
+  key rather than failing the resend.
+
+### D-100 X-Forwarded-For is honoured only from trusted proxies (ADOPTED for v1.0)
+- New `com.unilink.security.IpResolver`, used by every call site that
+  resolves a client IP: `AuthController` (resend, login, password-reset
+  request, account deletion), `AdminAuthController` (login, TOTP
+  enrol/verify, email-OTP verify) and `AdminController` (audit IP for
+  all admin actions). No raw `getRemoteAddr()` and no direct
+  `X-Forwarded-For` read remains outside `IpResolver`.
+- Rule: the header is honoured only when the direct peer
+  (`getRemoteAddr()`) is a configured trusted proxy. Default trusted set
+  is `127.0.0.1, ::1` — the nginx front-end of D-1 terminates on
+  127.0.0.1, so the default is correct for the planned deployment.
+  Configurable via `app.security.trusted-proxies`
+  (`TRUSTED_PROXIES` env override) in `application.yml`.
+- The first header entry is the client; later entries are proxies. The
+  values `unknown`, blanks and non-IP-literals are skipped; if no usable
+  entry remains, the direct remote address is used. A hostname in the
+  header is never resolved (no DNS lookup from attacker-controlled
+  input). Bracketed IPv6 and an IPv4 `:port` suffix are accepted.
+- Trusted entries are matched as parsed IP addresses, so `::1` and
+  `0:0:0:0:0:0:0:1` are the same proxy. Only exact addresses are
+  supported — no CIDR ranges yet; a deployment that needs a proxy range
+  should extend `IpResolver`, not bypass it.
+- This fixes two opposite bugs: `AdminController.ip()` trusted the header
+  from *any* client (audit IPs could be forged; per-IP caps could be
+  dodged by asserting a fresh header per request), while the auth
+  controllers ignored the header entirely (behind a real proxy every
+  client would share the proxy's IP key).
+
+### D-101 Multi-key rate-limit acquires are atomic (ADOPTED for v1.0)
+- `LoginThrottle` mutations now run under a single lock (previously each
+  `ConcurrentHashMap.compute` was atomic per key, but a pair of keys was
+  not). New `tryAcquireAll(Map<String,Integer> caps, window,
+  lockDuration[, cooldownKey, cooldown])`: either every key is consumed
+  or none is — except that the first key whose cap is exceeded is locked
+  for `lockDuration`, mirroring single-key `tryAcquire`.
+- Rationale: the old resend path did two sequential `tryAcquire` calls
+  (user, then IP). A resend that passed the user cap but hit the IP cap
+  consumed one unit of user quota without sending anything, and two
+  concurrent resends could both pass a pre-check and consume quota the
+  caps should have refused. The resend path now does one atomic acquire
+  of the user + phone + IP keys, with the 60 s cooldown folded into the
+  same critical section. The `isLocked` / `isCoolingDown` pre-checks are
+  kept only to produce the specific "wait a minute" message; the atomic
+  acquire re-validates everything.
+- Single-key behaviour is unchanged: 5 failures → 15-minute lock, window
+  expiry resets the count, success clears the bucket. All pre-existing
+  `LoginThrottleTest` cases pass unmodified.
+
+### D-102 Password-reset OTP requests are capped, silently (ADOPTED for v1.0)
+- `AuthService.requestPasswordReset` now caps at 5/hour per email and
+  10/hour per IP (same `tryAcquireAll` pattern, no new table). A capped
+  request sends nothing and returns normally — the controller still
+  answers the generic "If the email exists, a reset code was sent", so
+  the cap is not an oracle for whether the email exists or how many
+  resets it has had.
+- Rationale: this was the only OTP send with no rate limit at all — an
+  attacker could flood any address with reset emails indefinitely, and
+  use the endpoint to probe liveness. NFR-SEC-05 requires OTP endpoints
+  to be rate-limited. The verify side already had a 5-attempt cap per
+  reset token (`OtpService.verifyPasswordResetOtp`); this closes the
+  send side.
+- The signature changed to `requestPasswordReset(String email, String
+  ip)`; the only caller is `AuthController.resetRequest`, which now
+  passes `IpResolver`-resolved IP. No other caller exists.
+
+### D-103 OTP wrong-guess counters must survive the verify transaction's rollback (ADOPTED for v1.0)
+- Found by Worker B while proving the brute-force requirement: the
+  5-attempt caps on phone-OTP and password-reset-OTP verification could
+  never engage. `OtpService.verifyPhoneOtp` / `verifyPasswordResetOtp`
+  did `row.setAttempts(n+1); save(row)` and then threw `OTP_INVALID` —
+  but the throw rolls back the enclosing `@Transactional` method
+  (`AuthService.verifyPhone` / `confirmPasswordReset`), so the increment
+  was rolled back with it. Every wrong guess saw `attempts = 0`, so
+  guessing was unbounded within the code's lifetime (5 min phone OTP,
+  15 min reset OTP).
+- Fix: the increment is now an atomic `UPDATE … SET attempts =
+  COALESCE(attempts, 0) + 1` executed by a `@Modifying` repository
+  method in its own `REQUIRES_NEW` transaction
+  (`PhoneOtpRepository.incrementAttempts`,
+  `PasswordResetTokenRepository.incrementAttempts`), called from
+  `OtpService` before throwing. The counter commits even when the
+  caller's transaction rolls back, and concurrent wrong guesses cannot
+  lose updates (single-statement increment).
+- The same bug class exists in `AdminAuthService.verifyEmailOtp` (admin
+  email-OTP verify: same setAttempts+save+throw inside `@Transactional`),
+  but that file is owned by Worker A and was mid-rewrite when found, so
+  it was left untouched and is flagged in `07-section-b.md` instead.
+  Note the existing service-level test
+  `AdminAuthSecurityTest.emailOtpAttemptCounterSurvivesFreshRequest`
+  passes DESPITE the bug, because the test class is `@Transactional`:
+  the test's own transaction never rolls back mid-test, so the counter
+  appears to persist. It proves the counter logic, not the production
+  behaviour. A MockMvc-level test is the honest proof; one is added for
+  the phone and reset paths in `OtpRateLimitTest`.
+- The TOTP path never had this bug: it records failures in the
+  in-memory `LoginThrottle`, which no transaction can roll back.
+
+### D-104 EXIF stripping is dependency-free and covers every image upload path (ADOPTED)
+- EXIF is stripped by a new dependency-free parser, `storage/ExifStripper`
+  (JDK only, no new Maven dependency): JPEG drops APP1 segments whose payload
+  starts with `Exif\0\0`; PNG drops `eXIf` chunks; WebP drops `EXIF` chunks,
+  repairs the RIFF size and clears the VP8X EXIF-present flag. Pixel data is
+  copied byte-for-byte, so OCR and rendering are unaffected.
+- Applied on ALL server-side upload paths that accept images: sign-up ID card
+  and profile photo (`AuthService.register`), resubmitted ID card
+  (`AuthService.resubmit`), profile photo and cover
+  (`ProfileService.uploadPhoto/uploadCover`), post attachments
+  (`PostService.addPostAttachment`), chat attachments
+  (`MessagingService.sendMessageWithAttachment`). PDFs pass through unchanged
+  (no EXIF segment exists in PDF).
+- Size is validated on the ORIGINAL bytes, then stripping runs, then the
+  stripped bytes are stored; the stored `size_bytes` is the stripped length.
+- A structurally malformed image is returned unchanged (fail-open): it already
+  passed magic-byte sniffing, no decoder can read EXIF from an unparseable
+  container, and rejecting it would change previously-accepted uploads.
+- Residual: non-EXIF APP1 segments (e.g. XMP) and PNG `iTXt`/`zTXt` text chunks
+  are kept — they can in principle carry location/creator text. Dropping all
+  APP1 segments and all PNG text chunks is a follow-up, not done here, because
+  D-029a specifies EXIF removal and XMP may carry copyright the owner wants.
+- Already-stored images are NOT re-processed: only new uploads are stripped.
+  ID images age out anyway under D-053 (7/30 days); a backfill for old profile
+  photos/covers/attachments is a separate job if the owner wants it.
+- The event-poster path in D-029a (5 MB) has no upload endpoint in the code, so
+  there is nothing to strip there yet; when a poster upload is built it must
+  route through `UploadValidator` + `ExifStripper` like the other paths.
+
+### D-105 Per-post attachment cap is 5; per-message 1 by design; no per-room cumulative cap (ADOPTED)
+- Max **5 attachments per post**, enforced server-side in
+  `PostService.addPostAttachment` (count checked BEFORE storing, so a rejected
+  6th file leaves no orphaned object); over the limit returns 400
+  (`ATTACHMENT_LIMIT`). The number 5 matches the SRS's "a specific limit"
+  (D-029a) and the report auto-hide threshold's order of magnitude; it is a
+  constant (`UploadValidator.MAX_ATTACHMENTS_PER_POST`) so it is one edit to change.
+- Per-message: exactly **1 attachment per message**, enforced structurally —
+  there is no API that adds a second file to a message
+  (`sendMessageWithAttachment` creates one message + one attachment). No
+  separate numeric per-message cap is needed.
+- Per-room/per-chat cumulative cap: **none**. A cumulative cap would break
+  long-lived department/university rooms, which legitimately accumulate files
+  over a term. Abuse is bounded by the per-file 10 MB cap, verified-membership
+  checks on every send/download, and the per-message limit above. A per-user
+  daily upload quota is noted as a follow-up, not built here.
+- Known race: the count check and the store are not atomic, so two concurrent
+  5th uploads could both pass and leave 6 attachments. Consequence is one
+  extra file, not a security breach; fixing it would need a DB lock or
+  unique-constraint trick disproportionate to the risk.
+
+### D-106 Upload hardening: sniffing, file names, traversal, download headers (ADOPTED)
+- Magic-byte sniffing governs; declared content type and file extension are
+  never trusted. Tightened in this work: JPEG now requires a real marker code
+  as the 4th byte (`FF D8 FF 00` is rejected); PNG requires the full 8-byte
+  signature (a 4-byte `PNG` prefix is rejected); PDF is an attachment type,
+  never an image. GIF/SVG/text remain rejected everywhere.
+- `UploadValidator.sanitizeFileName` is applied to every client-supplied file
+  name before storage and before it is echoed in a `Content-Disposition`
+  header: directories are stripped (no traversal, no absolute path), quotes,
+  backslashes and control characters are replaced (no header injection),
+  leading dots are removed, length is capped at 200 chars, null/blank becomes
+  `file`. The stored `file_name` is the sanitised name, not the raw upload name.
+- `LocalStorageAdapter.size()` had no traversal guard (unlike
+  store/open/exists/delete) and could leak an arbitrary file's size/existence
+  via an absolute or escaping key; it now applies the same root-normalisation
+  check and returns -1 outside the root. `store()` now also rejects a bad
+  namespace and defaults a null file name to `file`.
+- ID-card downloads (`GET /api/admin/verification/{id}/id-image`) used to
+  always answer `image/jpeg` even for a PNG/WebP ID card; the content type is
+  now sniffed from the stored bytes (same pattern `ProfileService.readImage`
+  already used).
+- `AuthService.register`/`resubmit` used to store ID cards and photos with a
+  hardcoded `"image/jpeg"` content type regardless of the real type; the
+  sniffed type is now stored.
+
+### D-107 Attachment lifecycle: owner-only delete, soft-deleted posts stay sealed (ADOPTED)
+- New endpoint `DELETE /api/posts/{id}/attachments/{attachmentId}` (owner
+  only): the row and the stored object are both removed, so a deleted
+  attachment leaves no orphaned file. A non-owner, or a wrong post id, gets
+  404 (never a hint the attachment exists). There was previously no
+  attachment-delete path at all; message attachments have none either, and
+  need none — messages cannot be deleted, so their attachments have no
+  lifecycle of their own.
+- Profile photo/cover replacement is already owner-only by construction (the
+  controller passes the session user's id; the key deleted is read from that
+  user's own row) and already stores the new object BEFORE deleting the old
+  one, so a failed store never loses the current photo. No change to the
+  ordering was needed; the replacement now also strips EXIF (D-104) and
+  sanitises the file name (D-106).
+- `deletePost`/`deleteEvent` only soft-delete (status `REMOVED`); their
+  attachment files are deliberately KEPT so a moderation RESTORE can bring
+  the post back — but while the post is not `ACTIVE` its attachments are no
+  longer listable or downloadable (previously they were: `getPost` does not
+  check status, so a "deleted" post's files stayed reachable). This closes a
+  real gap found in review.
+- `AuthService.resubmit` does NOT delete the previous ID-card object when a
+  new one is stored: the rejected attempt's `VerificationRequest` row still
+  references it, and D-053 keeps rejected ID images for 30 days to support
+  appeal. The `purgeIdImages` job deletes it when retention expires. This is
+  intentional, not an orphan.
+
+### D-108 MessageAttachment.createdAt + V011 data-integrity fixes (M6, M8)
+
+- **Status:** ADOPTED
+- `MessageAttachment.createdAt` was always null: the entity had no `createdAt`
+  field at all (and an empty `@PrePersist onCreate(){}`), V005 created
+  `message_attachments` without a `created_at` column, and
+  `MessagingService.listMessageAttachments` passed a literal `null` into the
+  DTO. Fix: entity field + `@PrePersist` (sets only if null, same pattern as
+  sibling `Attachment`), DTO maps `a.getCreatedAt()`, and V011 adds the column
+  (`DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)`).
+- V011 also adds the M6 foreign keys that were missing: `appeals.appellant_id`
+  → users (SET NULL), `appeals.decided_by` → admin_accounts (RESTRICT),
+  `moderation_events.actor_admin_id` → admin_accounts (RESTRICT),
+  `team_members.event_post_id` → posts (CASCADE). Deliberately NO FK for
+  polymorphic targets (`appeals.target_id`, `moderation_events.target_id`,
+  `reports.target_id`) or for `moderation_snapshots.message_id/sender_id` —
+  a snapshot is D-033 evidence and must survive message deletion.
+- M8 split: `profiles.links` becomes TEXT (the entity is `String @Lob` and the
+  UI treats links as free display text; a plain URL is not valid JSON, so the
+  MySQL JSON column would reject the write at runtime). `audit_logs.metadata`
+  stays JSON: `AuditService` always writes `ObjectMapper` JSON, valid by
+  construction.
+- V011 is additive only (no CREATE/DROP TABLE, no migration rewritten).
+  Live-verification note: V011's chain can only be proven by a genuine Flyway
+  run against real MySQL; H2 cannot run the production migrations
+  (MySQL-only DDL). Covered statically by `MigrationV011Test`.
+
+### D-109 Verification-decision email + security-email rule (I-11, I-15)
+
+- **Status:** ADOPTED
+- On approve/reject the system now sends an email as well as the in-app
+  notification (`NotificationEventListener` → `EmailProvider.sendSimple`,
+  subjects "Your UniLink verification was approved" /
+  "…was rejected"). The email body carries the rejection reason on reject.
+  A provider failure is caught and logged only — email failure must never
+  fail the verification decision.
+- Security emails cannot be disabled (FR-NOT-01, D-029c):
+  `NotificationService.setPreference` rejects `email=false` for
+  `VERIFICATION_DECISION` with 400 `SECURITY_EMAIL_REQUIRED`. OTP and
+  password-reset emails bypass this service, so they were never
+  disableable. The set is `NotificationService.SECURITY_EMAIL_TYPES`
+  (currently one member); adding a type is a one-line change.
+- Notification list / read / unread-count stay open to any authenticated
+  student: the VERIFICATION_DECISION in-app notification is how an
+  unverified user learns the decision, so gating the list would break the
+  delivery path the email now supplements.
+
+### D-110 OCR university-name comparison (I-12, FR-AUTH-06)
+
+- **Status:** ADOPTED
+- The OCR scorer now compares the university name as the SRS requires:
+  `TesseractOcrAdapter.score(text, fullName, studentId, universityName)`
+  adds one component per distinctive token of the university name.
+  Stopwords (`university, of, the, and, institute, college, school, united,
+  national`) and tokens shorter than 3 chars are skipped, so a card that
+  merely says "University" earns nothing; if no distinctive token remains
+  the component is skipped entirely (score unchanged, not diluted).
+- Regression found by the new tests and fixed in the same scorer: the
+  student-ID check compared the raw ID against lowercased text, so an ID
+  with any uppercase letter could never match (a perfect card scored at
+  most 0.66). The check now lowercases the ID first. That line predates
+  Worker D (initial commit d064f28).
+- `OcrProvider.extract` gained a default 5-arg overload delegating to the
+  4-arg form, so existing fakes keep working; `OcrJobService.runOcr` gained
+  a 5-arg form; `AuthService.register` and `resubmit` pass the university
+  name. The old 3-arg `score` delegates with a null university (unchanged
+  behaviour).
+
+### D-111 Suspension-appeal token wired + public appeal page (I-13, D-019)
+
+- **Status:** ADOPTED
+- Chosen over removing `POST /api/appeals/public`: the endpoint is now
+  reachable. `AdminService.changeUserState` issues a suspension-appeal token
+  (`ModerationService.createSuspensionAppealToken`, D-019, 7-day single-use)
+  and emails the link `${baseUrl}/appeals/public?token=<token>` after
+  SUSPEND and BAN; `decideRecommendation` does the same when a moderator's
+  recommendation is confirmed. Any failure to issue/email is caught and
+  logged — the suspension stands and the link can be re-issued.
+- New public student-app page `PublicAppeal.tsx` at the unguarded route
+  `/appeals/public` (a suspended user has no session): reads `?token=`,
+  submits `{targetType:'USER', targetId:null, reason}` — the token flow
+  ignores targetType/targetId and finds the appeal by token hash only.
+  The old "endpoint can never succeed" state is gone; the token row is
+  created by the suspend/ban path, so the page is only reachable via the
+  emailed link.
+
+### D-112 Moderator-scope remaining holes (I-14, D-036, D-032)
+
+- **Status:** ADOPTED
+- SUSPEND and BAN in `AdminService.changeUserState` now require Platform
+  Admin (`policy.requirePlatformAdmin`); moderators must use the
+  recommendation flow (`recommendSuspension` → Platform Admin confirms,
+  D-036). REACTIVATE / REVOKE / FORCE_RESET are unchanged (FORCE_RESET is
+  Worker A's).
+- Dashboard `pendingAppeals` is now scoped for moderators
+  (`JOIN users u ON u.id=a.appellant_id … AND u.university_id=<uni>`);
+  platform keeps the global count.
+- Analytics aggregates scoped for moderators: `eventsPerSector` filters
+  `p.scope_university_id=<uni>`, `verificationTurnaroundHours` joins `users`
+  and filters by university, `activeUniversities` filters
+  `university_id=<uni>` (returns 1/0 for their university).
+  `usersByState` / `usersPerDay30` were already scoped.
+- Appeals list/decide, comment moderation and GLOBAL announcements were
+  already fixed in Phase 2 verification and were not redone.
+
+### D-113 Secondary-write guards (I-15, D-016)
+
+- **Status:** ADOPTED
+- `requireVerified` added to the secondary writes the audit listed:
+  `PostService.unreact`/`unbookmark`; `MessagingService.myRooms`,
+  `searchRooms`, `listMessages`, `markRead`, `listMessageAttachments`,
+  `openMessageAttachment` (and `block`/`unblock`/`mute` at the controller,
+  because the service takes raw ids); `ProfileController` deleteProject /
+  deleteEducation / deleteAchievement / removeSkill / followSector /
+  unfollowSector / unfollow; `SearchController.search`;
+  `NotificationController.pref`.
+- `GET /api/posts/{id}/comments` and `GET /api/teams/event/{id}` now take
+  `Authentication` and apply the D-016 visibility rule (verified: any;
+  unverified: NATIONAL only, else 404) — the same rule as `getPost` and
+  `createTeam`.
+- `ModerationService.appeal` now checks ownership via the existing
+  `resolveOwner`: unknown target → 404 `NotFound("Appeal target")`,
+  non-owner → 403 `Forbidden("Only the owner can appeal this item")`.
+  `appealByToken` (the suspended-user path) is untouched.
+- Deliberately NOT gated: `updateMe` / photo / cover (own-profile edits,
+  not in the audit's §4.3 list) and notification list/read (see D-109).
+
+### D-114 Admin IP allow-list enforced at login (I-16)
+
+- **Status:** ADOPTED
+- Chosen over deleting the entity: `AdminAuthService.login` now enforces
+  `AdminIpAllowlist`. After password auth succeeds (and after the
+  temp-password expiry check), if the allow-list has active rows and the
+  resolved client IP matches none of them, the login is refused with 403
+  `Forbidden("This IP address is not allowed to sign in to the Admin Portal")`
+  and an `ADMIN_LOGIN_IP_BLOCKED` audit row is written. A blocked login does
+  NOT reset the throttle.
+- The list is opt-in: with no active rows every IP is allowed (previous
+  behaviour preserved). Matching is exact IP or IPv4 CIDR
+  (`ipMatchesCidr`, prefix 0–32; malformed input never matches). The IP
+  used is the `IpResolver`-resolved client IP (Worker A, D-100).
+- The admin password-change endpoint is Worker A's job (D-093), not this
+  decision.
+
+### D-115 I-17 + I-18 bundle (duplicate phones, resubmit counting, identity changes, deletion/purge, LoginAttempt)
+
+- **Status:** ADOPTED
+- Duplicate phones (D-077): registration is blocked with 403 when the phone
+  belongs to a SUSPENDED or BANNED account; other duplicates remain allowed
+  (soft uniqueness). The verification queue flags them:
+  `VerificationRequestDto.duplicatePhone` is true when another user shares
+  the applicant's phone, shown in the admin queue as a "Duplicate phone"
+  badge and a review-pane warning.
+- Resubmit cap (D-012): `AuthService.resubmit` now counts only `RESUBMIT`
+  outcomes in the last 24 h (`countByUserIdAndOutcomeAndCreatedAtAfter`);
+  APPROVED/REJECTED decision rows no longer consume the 3-per-24h cap.
+- `previousAttempts` is now per-request
+  (`countByVerificationRequestId`), not per-user.
+- Identity-change decide path (FR-PROF-09, D-017): new admin endpoints
+  `GET /api/admin/identity-changes` and
+  `POST /api/admin/identity-changes/{id}/decide`, moderator-scoped by the
+  applicant's university; a reason is mandatory; approve validates the new
+  university is active, the department belongs to it and the student ID is
+  free at the new university, then atomically swaps
+  university/department/studentId (and `idCardKey` when a new one is
+  present). Remaining gap (not expanded): the student submit path still
+  takes no ID image, though D-017 mentions one.
+- Account deletion now collects storage keys from ALL of the user's
+  verification requests, not only the latest; the purge job additionally
+  nulls `User.idCardKey` when it points at the purged object (registration
+  stores one key on both rows).
+- `LoginAttempt` is now written (one row per login attempt, success flag;
+  write failure is swallowed so the login outcome stands) instead of
+  deleting the dead table — the table is the audit trail for brute-force
+  review.
+- V006 `DELIMITER $$` trigger block: live-verification-only. It can only be
+  proven by running Flyway against real MySQL; not attempted.
+
+### D-116 Sole Platform Admin recovery — break-glass via deployment-owner DB/console action with dual control (ADOPTED for v1.0)
+- Problem: the sole Platform Admin loses BOTH the authenticator (TOTP secret) and all 10 recovery codes. There is no in-code recovery: `AdminService.resetModeratorCredentials` (`POST /api/admin/moderators/{id}/reset-credentials`) requires an authenticated, MFA-verified Platform Admin caller, so the locked-out sole admin cannot invoke it and no peer exists to do so; `AdminAuthService.verifyEmailOtp` refuses a Platform Admin outright (D-078); `enrolTotp` throws `ALREADY_ENROLLED` while `totpEnrolled` is true. (Phase 2 verification report `06-phase2-verification.md`, Notes.)
+- **Decision:** recover by a deployment-owner-controlled database/console action with dual control and full audit. The Executor performs, in one transaction, exactly the MFA part of what `resetModeratorCredentials` already does in code — delete the `admin_totp_secrets` row, delete the `admin_recovery_codes` rows, set `admin_accounts.totp_enrolled = 0`, delete the admin's `SPRING_SESSION` rows — then the admin re-enrols through the normal login flow (`POST /api/admin/auth/login` returns `NEEDS_ENROLMENT` + fresh `otpauthUrl`; `POST /api/admin/auth/totp/enrol` verifies a code and issues 10 new single-use recovery codes). No password is reset in the main path: the password is not lost, and resetting it from a console would require hand-manufacturing an Argon2id hash and distributing a temporary password — new risk for no benefit. Password-also-lost is a separate escalation (§9 of the runbook: offline Argon2id hash with D-014 parameters, verified before use, delivered once out of band).
+- **Who can trigger it:** the locked-out admin (Requester) asks via a pre-registered channel; the Deployment Owner (Executor, holds DB/console access) executes; a named senior person independent of the Requester (Authoriser, e.g. head of IT / registrar's nominee) verifies the Requester's identity out of band (at least two of: callback on pre-registered phone, pre-registered email, photo ID on video/in person, line-manager/HR confirmation) and signs the approval. Requester ≠ Authoriser; no execution without that signed approval; an approval is valid 24 hours for one execution only. Role-holders are named at deploy time in the deployment's private operations record.
+- **Dual control / separation of duties:** approval and execution are by different people, and the Executor may not execute on a verbal-only, self-issued, or expired approval. Where the Deployment Owner is the locked-out admin (common in a small deployment), the Executor step is still performed only after the Authoriser's approval; the control then rests on the approval plus the audit trail, and that limitation is recorded in the incident record. Dual control here is procedural, not technical — a person with sole database access can technically act alone; the controls make misuse attributable and visible, they cannot physically prevent it.
+- **Audit (what is logged and where):** (1) an incident record outside the UniLink database (ticket reference, timestamps, all three names, identity evidence, approval, audit row id, enrolment completion time; retained ≥1 year, same bar as D-037); (2) an `audit_logs` row `ADMIN_BREAK_GLASS_RESET` inserted by hand, chained per `AuditService` (`prev_hash` = latest `row_hash`, `row_hash` = SHA-256 hex of `prev_hash|action|target_type|target_id|actor_admin_id|reason|created_at-string`), `actor_admin_id` = recovered admin id (FK requires an existing admin row or NULL), metadata JSON naming ticket/requester/approver/executor, `method: "db-console"`, `passwordReset: false`, Executor host/IP — never a secret; (3) the application's own rows on re-enrolment (`ADMIN_LOGIN_PASSWORD_OK`, `ADMIN_TOTP_ENROLLED`, `ADMIN_LOGIN_OK` with `mfa: "totp"`). Post-recovery the chain is verified (`AuditService.verifyChain`) and the audit CSV export filed with the incident record. The `audit_logs` append-only triggers (D-037) mean the hand-inserted row can never be used to rewrite history.
+- **Time limits and expiry:** approval valid 24 hours, one execution; the reset must only be executed while the Requester is present to re-enrol immediately, because from commit until re-enrolment the account is in `NEEDS_ENROLMENT` (password-only enrolment window — anyone with the password could enrol a fresh authenticator). Enrolment target within 1 hour, hard limit 24 hours; beyond that it is an open security incident, not a pending task.
+- **Re-enrolment:** the ordinary flow, no special path — login → `NEEDS_ENROLMENT` → scan fresh `otpauthUrl` on the new device → enrol with a verifying code → 10 new recovery codes displayed once, stored immediately in two separate places (password manager + paper, never on the same device as the authenticator) → verify with a fresh TOTP code. Old secret and codes are confirmed gone (counts 0) and old sessions confirmed invalidated.
+- **Revocation / closure:** the path is a procedure, not a standing credential, so there is nothing to disable — closure is a checklist: enrolment confirmed, old MFA material confirmed gone, sessions confirmed dead, chain verified + CSV filed, second Platform Admin created and TOTP-enrolled, any shared DB/console credentials rotated, approval spent (a further incident needs fresh approval), incident record closed with all timestamps, row ids, and the chain-check result.
+- **What must NEVER be done:** no shared backdoor password, hardcoded credential, unauthenticated reset endpoint, or flag/config that bypasses authentication — in code, config, or "temporarily"; never disable TOTP globally; never grant an email-OTP exception for a Platform Admin (D-078); never delete the `admin_accounts` row to re-trigger `AdminBootstrap` (it runs only when no admins exist, and the delete fails while audit rows reference the account, `fk_audit_actor ON DELETE RESTRICT`); never write a temporary password in a ticket, email, chat, or log; never execute without signed unexpired approval; never leave the account in `NEEDS_ENROLMENT` overnight without treating it as an incident; never skip the audit row or "repair" the chain by updating/deleting a row.
+- **Rejected alternatives:** (b) pre-provisioned sealed recovery credential (envelope/vault) — a standing secret with silent failure modes (lost/never-created envelope = unrecoverable at the worst moment; stolen sealed codes never expire; cannot be drilled without consuming it; a spare admin account is an unmonitored second Platform Admin); (c) standing second Platform Admin — adopted as *prevention* (§10 policy: maintain ≥2 Platform Admins at all times; a second admin is created as step 6 of every recovery), but it is not a recovery procedure for the sole-admin case; (d) escrowed/split TOTP secret or encryption key — key-management machinery the team does not operate, standing-secret failure mode, and compromise of the encryption key would expose every admin's TOTP secret; (e) email-OTP exception — re-opens the exact hole D-078 closed; (f) delete + bootstrap — destructive, unaudited, blocked by the audit FK; (g) unauthenticated endpoint / backdoor / TOTP disable — vulnerabilities, not trade-offs.
+- **Single-person deployment (no second trusted person):** true dual control is impossible; the minimum viable control is detection, delay, and audit — (1) a named person *outside* the deployment (registrar/HR/parent-organisation contact) confirms the Requester's identity out of band; (2) written notice of the intended action to a pre-registered monitoring mailbox the Executor does not solely control, plus a minimum 4-hour cooling-off wait before executing; (3) written self-authorisation filed before any database change; (4) full audit as above; (5) a second Platform Admin created immediately after re-enrolment so the deployment stops being single-person. If that is impossible, the organisation accepts single-person operation with detection-only controls in writing, reviewed annually.
+- **Prevention:** maintain at least two active Platform Admins at all times; store recovery codes separately from the authenticator device; drill §4–§5 annually on a non-production copy (never execute Step 1 against production). Known gaps this does not fix: no admin password-change endpoint (a recovered admin cannot rotate their own password without a peer — Phase 2 Notes); recovery codes are unsalted SHA-256 and never expire (Phase 2 Notes).
+- **Owner actions:** name the Executor and Authoriser (and deputies) per deployment with pre-registered contact details; confirm the single-person acceptance in writing where it applies. D-068's recovery question is answered for the sole-admin case by this entry; the rest of D-068 (TOTP design approval) is unchanged.
+- **Status:** ADOPTED for v1.0 as the recovery procedure (documentation only — no code, endpoint, flag, or config change in this task). No live MySQL verification claimed.
+
+### D-117 Admin email-OTP wrong-guess counter must survive the verify transaction's rollback (ADOPTED)
+- Same D-103 bug class as the phone and password-reset OTPs, found by Worker B and left for the coordinator because `AdminAuthService` was Worker A's file mid-rewrite: `verifyEmailOtp` did `setAttempts(n+1)` + `save` inside a `@Transactional` method, then threw `OTP_INVALID`, so the increment rolled back and the 5-attempt cap could never engage in production. The existing `AdminAuthSecurityTest.emailOtpAttemptCounterSurvivesFreshRequest` passes despite the bug because the test class is `@Transactional` — the persistence context still shows the rolled-back increment within the test.
+- Fix mirrors D-103 exactly: `AdminEmailOtpRepository.incrementAttempts` (`@Modifying`, `REQUIRES_NEW`, atomic `UPDATE … SET attempts = COALESCE(attempts,0)+1`), used by `verifyEmailOtp`. Proven by new non-transactional `AdminEmailOtpAttemptsTest` (3 tests): wrong guesses counted across separate transactions, 6th guess hits `OTP_ATTEMPTS_EXCEEDED`, correct code still verifies after wrong guesses.
+- Not changed: `AuditService.write` stays same-transaction by design (D-037), so `ADMIN_LOGIN_FAILED` rows written just before a throwing verify still roll back with the caller's transaction. The security-critical state (throttle counters, OTP attempt counters) now survives; the audit loss for failed auth attempts is a documented limitation in the Phase 3 report, not silently fixed by changing audit semantics.
+
+### D-118 Users page hides SUSPEND/BAN from moderators (ADOPTED)
+- Worker D restricted SUSPEND/BAN to Platform Admin server-side (D-112), but `Users.tsx` still rendered both buttons to every admin; a moderator clicking one got a 403. The admin session already carries `role` (`SessionUser.role`, restored from `/api/admin/auth/me`), so the page now renders SUSPEND/BAN only when `role === 'PLATFORM_ADMIN'`. Server-side 403 remains the enforcement; this is presentation only. Lead text updated to say Suspend and Ban are Platform Admin only. Proven by `users-role-gating.test.tsx` (2 tests: moderator sees no SUSPEND/BAN; Platform Admin sees both).
+

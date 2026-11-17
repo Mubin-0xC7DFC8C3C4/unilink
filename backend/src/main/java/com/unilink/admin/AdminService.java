@@ -2,10 +2,13 @@ package com.unilink.admin;
 import com.unilink.admin.AdminDtos.*;
 import com.unilink.audit.AuditService; import com.unilink.common.Exceptions;
 import com.unilink.community.FeedService;
+import com.unilink.config.AppProperties;
 import com.unilink.identity.domain.*; import com.unilink.identity.dto.CatalogDtos.*;
 import com.unilink.identity.repo.*;
 import com.unilink.identity.service.SessionService;
+import com.unilink.integration.email.EmailProvider;
 import com.unilink.moderation.ModerationDtos.*;
+import com.unilink.moderation.ModerationService;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
 import org.springframework.jdbc.core.JdbcTemplate; import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +27,8 @@ public class AdminService {
   private final UserCredentialRepository creds; private final VerificationAttemptRepository attempts;
   private final AdminTotpSecretRepository totpSecrets;
   private final EventDetailRepository eventDetails; private final FeedService feed;
+  private final ModerationService moderation; private final EmailProvider email; private final AppProperties props;
+  private final IdentityChangeRequestRepository changeRequests;
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
       AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
@@ -32,7 +37,9 @@ public class AdminService {
       JdbcTemplate jdbc, AuditService audit, AccessPolicy policy, PasswordEncoder encoder, SessionService sessions,
       UserCredentialRepository creds, VerificationAttemptRepository attempts,
       AdminTotpSecretRepository totpSecrets,
-      EventDetailRepository eventDetails, FeedService feed){
+      EventDetailRepository eventDetails, FeedService feed,
+      ModerationService moderation, EmailProvider email, AppProperties props,
+      IdentityChangeRequestRepository changeRequests){
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
     this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
@@ -40,6 +47,7 @@ public class AdminService {
     this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds; this.attempts=attempts;
     this.totpSecrets=totpSecrets;
     this.eventDetails=eventDetails; this.feed=feed;
+    this.moderation=moderation; this.email=email; this.props=props; this.changeRequests=changeRequests;
   }
   /** Dashboard: real SQL counts only (FR-ADM-02). Moderators see their university only. */
   @Transactional(readOnly=true)
@@ -51,7 +59,12 @@ public class AdminService {
     m.put("pendingVerifications", count("SELECT COUNT(*) FROM verification_requests vr JOIN users u ON u.id=vr.user_id WHERE vr.status='PENDING_REVIEW'" + (uni==null?"":" AND u.university_id="+uni)));
     m.put("reportsAwaitingReview", count("SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.reporter_id WHERE r.status='ACTIVE'" + (uni==null?"":" AND u.university_id="+uni)));
     m.put("activeEvents", count("SELECT COUNT(*) FROM posts p JOIN event_details e ON e.post_id=p.id WHERE p.type='EVENT' AND p.status='ACTIVE' AND e.deadline>NOW()" + (uni==null?"":" AND p.scope_university_id="+uni)));
-    m.put("pendingAppeals", count("SELECT COUNT(*) FROM appeals WHERE status='PENDING'"));
+    // I-14: pendingAppeals was global for every moderator; it now joins the
+    // appellant so moderators see only their own university's appeals
+    // (platform admins keep the global count).
+    m.put("pendingAppeals", platform
+      ? count("SELECT COUNT(*) FROM appeals WHERE status='PENDING'")
+      : count("SELECT COUNT(*) FROM appeals a JOIN users u ON u.id=a.appellant_id WHERE a.status='PENDING' AND u.university_id="+uni));
     m.put("newUsersToday", count("SELECT COUNT(*) FROM users WHERE DATE(created_at)=CURDATE()" + (uni==null?"":" AND university_id="+uni)));
     return m;
   }
@@ -79,8 +92,57 @@ public class AdminService {
     return all.stream().map(r -> {
       User u = byId.get(r.getUserId());
       String uni = (u==null || u.getUniversityId()==null) ? null : uniNames.get(u.getUniversityId());
-      return VerificationRequestDto.from(r, u, uni, attempts.countByUserId(r.getUserId()));
+      // I-18: previousAttempts counts attempts on THIS request, not all
+      // attempts the user ever made. I-17: flag duplicate phones (D-077).
+      boolean duplicatePhone = u!=null && u.getPhone()!=null
+        && users.findByPhone(u.getPhone()).stream().anyMatch(o -> !o.getId().equals(u.getId()));
+      return VerificationRequestDto.from(r, u, uni, attempts.countByVerificationRequestId(r.getId()), duplicatePhone);
     }).toList();
+  }
+  // ---- identity-change requests (FR-PROF-09, D-017): admin decide path ----
+  /** Pending identity-change requests, scoped like the verification queue:
+   *  moderators see only requests from users of their own university. */
+  @Transactional(readOnly=true)
+  public List<IdentityChangeRequestDto> listIdentityChanges(Principals.AdminPrincipal admin){
+    List<IdentityChangeRequest> all = changeRequests.findAll(
+      org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.ASC, "createdAt"));
+    if ("PLATFORM_ADMIN".equals(admin.role()))
+      return all.stream().map(r -> IdentityChangeRequestDto.from(r, users.findById(r.getUserId()).orElse(null))).toList();
+    return all.stream()
+      .filter(r -> users.findById(r.getUserId()).map(u -> admin.universityId().equals(u.getUniversityId())).orElse(false))
+      .map(r -> IdentityChangeRequestDto.from(r, users.findById(r.getUserId()).orElse(null))).toList();
+  }
+  /** I-18: decide an identity-change request. On approval the user's
+   *  university/department/student ID swap atomically (D-017: the user kept
+   *  the old values until now); old posts keep their original scope (D-021).
+   *  The new student ID must be free at the new university. */
+  @Transactional
+  public IdentityChangeRequestDto decideIdentityChange(Principals.AdminPrincipal admin, Long requestId,
+                                                       boolean accept, String reason, String ip){
+    if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
+    IdentityChangeRequest r = changeRequests.findById(requestId).orElseThrow(() -> new Exceptions.NotFound("Identity change request"));
+    User u = users.findById(r.getUserId()).orElseThrow(() -> new Exceptions.NotFound("User"));
+    policy.requireModeratorScopeOr404(admin, u.getUniversityId());
+    if (!"PENDING".equals(r.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Request already decided");
+    if (accept){
+      University uni = universities.findById(r.getNewUniversityId()).orElseThrow(() -> new Exceptions.NotFound("University"));
+      if (!Boolean.TRUE.equals(uni.getActive())) throw new Exceptions.BadRequest("UNIVERSITY_INACTIVE","University is not active");
+      Department dept = departments.findById(r.getNewDepartmentId()).orElseThrow(() -> new Exceptions.NotFound("Department"));
+      if (!dept.getUniversityId().equals(uni.getId())) throw new Exceptions.BadRequest("DEPARTMENT_MISMATCH","Department does not belong to the university");
+      if (users.existsByUniversityIdAndStudentId(uni.getId(), r.getNewStudentId())
+          && !(uni.getId().equals(u.getUniversityId()) && r.getNewStudentId().equals(u.getStudentId())))
+        throw new Exceptions.Conflict("STUDENT_ID_TAKEN","This student ID is already registered at the new university");
+      u.setUniversityId(uni.getId()); u.setDepartmentId(dept.getId()); u.setStudentId(r.getNewStudentId());
+      if (r.getNewIdCardKey()!=null) u.setIdCardKey(r.getNewIdCardKey());
+      users.save(u);
+      r.setStatus("APPROVED");
+    } else {
+      r.setStatus("REJECTED");
+    }
+    r.setReason(reason); r.setDecidedAt(LocalDateTime.now()); r.setDecidedBy(admin.adminId());
+    changeRequests.save(r);
+    audit.write(admin.adminId(), "IDENTITY_CHANGE_"+r.getStatus(), "USER", u.getId(), reason, Map.of("requestId", r.getId()), ip);
+    return IdentityChangeRequestDto.from(r, u);
   }
   @Transactional(readOnly=true)
   public List<AdminUserDto> listUsers(Principals.AdminPrincipal admin, String q){
@@ -118,21 +180,53 @@ public class AdminService {
     String from = u.getState();
     String temporaryPassword = null;
     switch (action){
-      case "SUSPEND" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name()); }
-      case "BAN" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.BANNED).name()); }
+      // I-14 (FR-MOD-05, D-036): SUSPEND/BAN are Platform Admin only.
+      // Moderators recommend suspension (recommendSuspension) instead.
+      case "SUSPEND" -> { policy.requirePlatformAdmin(admin); u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name()); }
+      case "BAN" -> { policy.requirePlatformAdmin(admin); u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.BANNED).name()); }
       case "REACTIVATE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.VERIFIED).name()); }
       case "REVOKE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.REGISTERED).name()); }
       case "FORCE_RESET" -> {
         UserCredential c = creds.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
         temporaryPassword = UUID.randomUUID().toString().substring(0,12)+"A1";
-        c.setPasswordHash(encoder.encode(temporaryPassword)); creds.save(c);
+        c.setPasswordHash(encoder.encode(temporaryPassword));
+        // D-094/D-095: the temporary password must be changed at next login
+        // and expires 24 h after issue; an expired temp password rejects
+        // login (AuthService) and must be re-issued.
+        c.setMustChangePassword(true);
+        c.setTempPasswordExpiresAt(LocalDateTime.now().plus(com.unilink.identity.service.AuthService.TEMP_PASSWORD_VALIDITY));
+        creds.save(c);
       }
       default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown user action");
     }
     users.save(u);
     sessions.invalidateAllSessions(u.getEmail());
+    // I-13 (D-019): a suspension or ban issues the single-use appeal link
+    // and emails it — the POST /api/appeals/public path was dead until now
+    // because no token was ever created. Email failure must not roll back
+    // the suspension itself.
+    if ("SUSPEND".equals(action) || "BAN".equals(action)) issueSuspensionAppeal(u, reason);
     audit.write(admin.adminId(), "USER_"+action, "USER", userId, reason, Map.of("from", from), ip);
     return new UserActionResult(AdminUserDto.from(u), temporaryPassword);
+  }
+  /** I-13: create the single-use appeal token (ModerationService) and email
+   *  the link to the user. The token is returned once here and never stored
+   *  in plaintext; only its hash lives on the appeal row. */
+  private void issueSuspensionAppeal(User u, String reason){
+    try {
+      var token = moderation.createSuspensionAppealToken(u.getId());
+      String base = props.baseUrl()==null ? "" : props.baseUrl();
+      String link = base + "/appeals/public?token=" + token.token();
+      email.sendSimple(u.getEmail(), "Your UniLink account was suspended",
+        "Your UniLink account was suspended: "+reason
+        + ". You can appeal within 7 days using this link (single use): " + link);
+    } catch (Exception ex){
+      // The suspension stands; the appeal link can be re-issued by a
+      // Platform Admin. Log loudly — a missing appeal email is a D-019
+      // failure, not a silent one.
+      org.slf4j.LoggerFactory.getLogger(AdminService.class)
+        .error("Failed to issue/email suspension appeal link for user {}", u.getId(), ex);
+    }
   }
   /** Moderator recommends suspension; only a Platform Admin confirms it (D-036). */
   @Transactional
@@ -157,6 +251,7 @@ public class AdminService {
       User u = users.findById(r.getUserId()).orElseThrow(() -> new Exceptions.NotFound("User"));
       u.setState(com.unilink.identity.domain.AccountState.of(u.getState()).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name());
       users.save(u); sessions.invalidateAllSessions(u.getEmail());
+      issueSuspensionAppeal(u, r.getReason());
     }
     audit.write(admin.adminId(), "SUSPENSION_RECOMMEND_"+r.getStatus(), "USER", r.getUserId(), r.getReason(), Map.of("recommendationId", r.getId()), ip);
     return SuspensionRecommendationDto.from(r);
@@ -301,6 +396,9 @@ public class AdminService {
     audit.write(admin.adminId(), "ADMIN_DEACTIVATE", "ADMIN", adminId, reason, Map.of(), ip);
   }
   // ---- analytics: SQL aggregates only (FR-ADM-13) ----
+  // I-14: the three global aggregates are scoped to the moderator's
+  // university. usersByState/usersPerDay30 were already scoped; the other
+  // three were visible to any moderator in full.
   @Transactional(readOnly=true)
   public Map<String,Object> analytics(Principals.AdminPrincipal admin){
     boolean platform = "PLATFORM_ADMIN".equals(admin.role());
@@ -309,9 +407,9 @@ public class AdminService {
     Map<String,Object> m = new LinkedHashMap<>();
     m.put("usersByState", jdbc.queryForList("SELECT state, COUNT(*) c FROM users WHERE 1=1"+u+" GROUP BY state"));
     m.put("usersPerDay30", jdbc.queryForList("SELECT DATE(created_at) d, COUNT(*) c FROM users WHERE created_at>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)"+u+" GROUP BY DATE(created_at) ORDER BY d"));
-    m.put("eventsPerSector", jdbc.queryForList("SELECT st.name sector, COUNT(*) c FROM post_sector_tags pst JOIN sector_tags st ON st.id=pst.sector_tag_id JOIN posts p ON p.id=pst.post_id WHERE p.type='EVENT' GROUP BY st.name"));
-    m.put("verificationTurnaroundHours", jdbc.queryForObject("SELECT AVG(TIMESTAMPDIFF(HOUR, submitted_at, decided_at)) FROM verification_requests WHERE decided_at IS NOT NULL", Double.class));
-    m.put("activeUniversities", jdbc.queryForObject("SELECT COUNT(DISTINCT university_id) FROM users WHERE state='VERIFIED'", Long.class));
+    m.put("eventsPerSector", jdbc.queryForList("SELECT st.name sector, COUNT(*) c FROM post_sector_tags pst JOIN sector_tags st ON st.id=pst.sector_tag_id JOIN posts p ON p.id=pst.post_id WHERE p.type='EVENT'" + (uni==null?"":" AND p.scope_university_id="+uni) + " GROUP BY st.name"));
+    m.put("verificationTurnaroundHours", jdbc.queryForObject("SELECT AVG(TIMESTAMPDIFF(HOUR, submitted_at, decided_at)) FROM verification_requests vr" + (uni==null?"":" JOIN users u ON u.id=vr.user_id AND u.university_id="+uni) + " WHERE decided_at IS NOT NULL", Double.class));
+    m.put("activeUniversities", jdbc.queryForObject("SELECT COUNT(DISTINCT university_id) FROM users WHERE state='VERIFIED'" + (uni==null?"":" AND university_id="+uni), Long.class));
     return m;
   }
   @Transactional(readOnly=true)
@@ -376,17 +474,22 @@ public class AdminService {
   public record ResetCredentialsResult(AdminAccountDto admin, String temporaryPassword) {}
   /** Reset an admin's credentials (FR-ADM-12): the temporary password is
    *  returned ONCE in this response (like the TOTP recovery codes) and never
-   *  stored or logged in plaintext. The temporary password stays valid until
-   *  the admin changes it voluntarily — there is no must-change-on-next-login
-   *  enforcement (no admin password-change endpoint exists). The stale TOTP
-   *  secret row is deleted so the old secret does not linger; totpEnrolled=false
-   *  forces re-enrolment with a fresh secret. */
+   *  stored or logged in plaintext. D-094/D-095: the reset sets
+   *  must_change_password and a 24 h temporary-password expiry, so the next
+   *  login is restricted until the admin changes the password (POST
+   *  /api/admin/auth/change-password, after MFA) and an expired temporary
+   *  password rejects login until a Platform Admin re-issues it. The stale
+   *  TOTP secret row is deleted so the old secret does not linger;
+   *  totpEnrolled=false forces re-enrolment with a fresh secret. */
   @Transactional
   public ResetCredentialsResult resetModeratorCredentials(Principals.AdminPrincipal admin, Long id, String ip){
     policy.requirePlatformAdmin(admin);
     AdminAccount a = admins.findById(id).orElseThrow(() -> new Exceptions.NotFound("Admin"));
     String tmp = UUID.randomUUID().toString().substring(0,12)+"A1";
-    a.setPasswordHash(encoder.encode(tmp)); a.setTotpEnrolled(false); admins.save(a);
+    a.setPasswordHash(encoder.encode(tmp)); a.setTotpEnrolled(false);
+    a.setMustChangePassword(true);
+    a.setTempPasswordExpiresAt(LocalDateTime.now().plus(com.unilink.identity.service.AuthService.TEMP_PASSWORD_VALIDITY));
+    admins.save(a);
     if (totpSecrets.existsById(id)) totpSecrets.deleteById(id);
     sessions.invalidateAllSessions(a.getEmail());
     audit.write(admin.adminId(), "ADMIN_CREDENTIALS_RESET", "ADMIN", id, null, Map.of(), ip);

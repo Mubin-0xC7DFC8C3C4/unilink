@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { apiGet } from '../api/client';
-export interface SessionUser { id?: string|number; fullName?: string; email?: string; role?: string; verified?: boolean; university?: string; department?: string }
+export interface SessionUser { id?: string|number; fullName?: string; email?: string; role?: string; verified?: boolean; university?: string; department?: string; mustChangePassword?: boolean }
 interface AuthCtx { user: SessionUser|null; setUser:(u:SessionUser|null)=>void; ready: boolean; idleNotice: boolean; dismissIdleNotice: ()=>void }
 const Ctx = createContext<AuthCtx>({user:null,setUser:()=>{},ready:false,idleNotice:false,dismissIdleNotice:()=>{}});
 export const useAuth=()=>useContext(Ctx);
@@ -22,7 +22,11 @@ export function AuthProvider({children, restorePath='/auth/me', idleMinutes=105,
       // Admin /me answers {adminId, email, role, mfaVerified}; an admin who
       // has not finished MFA must not count as signed in for the guards.
       if (d.mfaVerified===false){ setUser(null); return; }
-      setUser({id: (d.id ?? d.adminId) as string|number|undefined, fullName: d.fullName as string|undefined, email: d.email as string|undefined, role: d.role as string|undefined, verified: d.state==='VERIFIED'});
+      // D-094/D-098: /me reports mustChangePassword, so a reload still
+      // lands the user on the change-password screen (via the Layout /
+      // AdminLayout redirect) instead of silently restoring a restricted
+      // session that then 403s on every call.
+      setUser({id: (d.id ?? d.adminId) as string|number|undefined, fullName: d.fullName as string|undefined, email: d.email as string|undefined, role: d.role as string|undefined, verified: d.state==='VERIFIED', mustChangePassword: d.mustChangePassword===true});
     }).catch(()=>setUser(null)).finally(()=>setReady(true));
   },[restorePath]);
   useEffect(()=>{ const poke=()=>{ lastActivity.current=Date.now(); setIdleNotice(false); };

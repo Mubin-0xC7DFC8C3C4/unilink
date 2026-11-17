@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvider } from '../app/auth';
 import Feed from '../features/feed/Feed';
 import EventsPage from '../features/events/EventsPage';
 import CalendarPage from '../features/events/CalendarPage';
@@ -284,15 +285,18 @@ describe('Admin pages (I-8)', () => {
   });
   it('user actions send UPPERCASE values in the path', async () => {
     route = (url, method) => {
+      // D-118: SUSPEND is Platform Admin only, so the page needs a
+      // Platform Admin in the auth context to render the button.
+      if (url === '/api/admin/auth/me') return json({ adminId: 1, email: 'pa@example.com', role: 'PLATFORM_ADMIN', mfaVerified: true });
       if (url === '/api/admin/users') return json([{ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' }]);
       if (url === '/api/admin/users/9/SUSPEND' && method === 'POST') return json({});
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<Users />);
+    render(<QueryClientProvider client={qc()}><MemoryRouter><AuthProvider restorePath="/admin/auth/me"><Users /></AuthProvider></MemoryRouter></QueryClientProvider>);
     await screen.findByText('Bad Actor');
     await user.type(screen.getByLabelText('Reason'), 'spam');
-    await user.click(screen.getByRole('button', { name: 'SUSPEND' }));
+    await user.click(await screen.findByRole('button', { name: 'SUSPEND' }));
     await waitFor(() => expect(lastPost('/api/admin/users/9/SUSPEND')).toBeDefined());
     expect(calls.some((c) => c.url.includes('/suspend'))).toBe(false);
   });

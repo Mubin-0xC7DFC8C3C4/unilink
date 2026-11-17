@@ -7,7 +7,7 @@ export interface EventItem { id: string|number; title: string; type?: string; de
 export interface UserProfile { id: string|number; userId?: number; fullName: string; email?: string; university?: string; department?: string; batch?: string; verified?: boolean; bio?: string; skills?: string[]; phone?: string; state?: string; headline?: string; links?: string; sectors?: string[]; followers?: number; following?: number; isOwner?: boolean; universityName?: string; departmentName?: string; batchLabel?: string }
 export interface Room { id: string|number; name: string; type: string; lastMessage?: string }
 export interface NotificationItem { id: string|number; title: string; body?: string; message?: string; createdAt?: string; read?: boolean; readFlag?: boolean; type?: string }
-export interface VerificationItem { id: string|number; fullName: string; email: string; university?: string; studentId?: string; status?: string; submittedAt?: string; ocrMatchScore?: number; ocrText?: string; previousAttempts?: number }
+export interface VerificationItem { id: string|number; fullName: string; email: string; university?: string; studentId?: string; status?: string; submittedAt?: string; ocrMatchScore?: number; ocrText?: string; previousAttempts?: number; duplicatePhone?: boolean }
 export const SECTORS = ['Software Engineering','Data Science','AI/ML','Cyber Security','Web Development','Competitive Programming'];
 export const LEVELS = ['DEPARTMENT','UNIVERSITY','HUB','NATIONAL'] as const;
 

@@ -379,15 +379,18 @@ describe('Verification follow-up — FORCE_RESET shows the temporary password on
   });
   it('shows no temp password for other actions', async () => {
     route = (url, method) => {
+      // D-118: SUSPEND is Platform Admin only, so the page needs a
+      // Platform Admin in the auth context to render the button.
+      if (url === '/api/admin/auth/me') return json({ adminId: 1, email: 'pa@example.com', role: 'PLATFORM_ADMIN', mfaVerified: true });
       if (url === '/api/admin/users') return json([{ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' }]);
       if (url === '/api/admin/users/9/SUSPEND' && method === 'POST') return json({ user: { id: 9 }, temporaryPassword: null });
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<Users />);
+    render(<QueryClientProvider client={qc()}><AuthProvider restorePath="/admin/auth/me"><MemoryRouter><Users /></MemoryRouter></AuthProvider></QueryClientProvider>);
     await screen.findByText('Bad Actor');
     await user.type(screen.getByLabelText('Reason'), 'spam');
-    await user.click(screen.getByRole('button', { name: 'SUSPEND' }));
+    await user.click(await screen.findByRole('button', { name: 'SUSPEND' }));
     await waitFor(() => expect(lastPost('/api/admin/users/9/SUSPEND')).toBeDefined());
     expect(screen.queryByText(/shown once/)).not.toBeInTheDocument();
   });

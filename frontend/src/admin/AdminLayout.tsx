@@ -1,10 +1,14 @@
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useTheme } from '../app/ThemeContext';
 import { useAuth } from '../app/auth';
 import { apiPost, errorMessage } from '../api/client';
 const NAV=[['Dashboard','/admin'],['Verification queue','/admin/verifications'],['Users','/admin/users'],['Moderation','/admin/moderation'],['Appeals','/admin/appeals'],['Events','/admin/events'],['Announcements','/admin/announcements'],['Master data','/admin/master-data'],['Moderators','/admin/moderators'],['Analytics','/admin/analytics'],['Audit log','/admin/audit']];
-export function AdminLayout(){ const {theme,toggle}=useTheme(); const nav=useNavigate(); const { setUser }=useAuth();
+export function AdminLayout(){ const {theme,toggle}=useTheme(); const nav=useNavigate(); const loc=useLocation(); const { setUser, user }=useAuth();
+  // D-094/D-098: a restored session can carry mustChangePassword (reported
+  // by /api/admin/auth/me). Redirect to the change-password screen from
+  // anywhere else; the screen itself is exempt (no loop).
+  useEffect(()=>{ if (user?.mustChangePassword && loc.pathname !== '/change-password') nav('/admin/change-password', { replace: true }); }, [user?.mustChangePassword, loc.pathname]);
   const [logoutError, setLogoutError] = useState<string|null>(null);
   // See Layout.tsx: a failed sign-out is surfaced, not swallowed.
   const logout=async()=>{ try{ await apiPost('/admin/auth/logout'); }catch(e){ setLogoutError(errorMessage(e)); } setUser(null); nav('/admin/login'); };

@@ -2,6 +2,7 @@ package com.unilink.admin;
 import com.unilink.audit.AuditService; import com.unilink.common.Exceptions; import com.unilink.common.Hashing;
 import com.unilink.identity.domain.*; import com.unilink.identity.repo.*;
 import com.unilink.integration.email.EmailProvider; import com.unilink.security.*;
+import com.unilink.identity.service.AuthService; import com.unilink.identity.service.SessionService;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.*; import org.springframework.security.core.Authentication;
@@ -16,18 +17,61 @@ public class AdminAuthService {
   private final AdminRecoveryCodeRepository recoveryCodes; private final AdminEmailOtpRepository emailOtps;
   private final AuthenticationManager authManager; private final TotpService totp; private final PasswordEncoder encoder;
   private final LoginThrottle throttle; private final AuditService audit; private final EmailProvider email;
+  private final SessionService sessions; private final AdminIpAllowlistRepository ipAllowlist;
   private final String encryptionKey; private final String totpIssuer;
+  /** D-096: recovery codes expire 90 days after enrolment. */
+  public static final java.time.Duration RECOVERY_CODE_VALIDITY = java.time.Duration.ofDays(90);
   public AdminAuthService(AdminAccountRepository admins, AdminTotpSecretRepository totpSecrets,
       AdminRecoveryCodeRepository recoveryCodes, AdminEmailOtpRepository emailOtps,
       @Qualifier("adminAuthManager") AuthenticationManager authManager, TotpService totp, PasswordEncoder encoder,
-      LoginThrottle throttle, AuditService audit, EmailProvider email,
+      LoginThrottle throttle, AuditService audit, EmailProvider email, SessionService sessions,
+      AdminIpAllowlistRepository ipAllowlist,
       @Value("${app.encryption-key}") String encryptionKey,
       @Value("${TOTP_ISSUER:UniLink}") String totpIssuer){
     this.admins=admins; this.totpSecrets=totpSecrets; this.recoveryCodes=recoveryCodes; this.emailOtps=emailOtps;
     this.authManager=authManager; this.totp=totp; this.encoder=encoder; this.throttle=throttle;
-    this.audit=audit; this.email=email; this.encryptionKey=encryptionKey; this.totpIssuer=totpIssuer;
+    this.audit=audit; this.email=email; this.sessions=sessions; this.ipAllowlist=ipAllowlist; this.encryptionKey=encryptionKey; this.totpIssuer=totpIssuer;
   }
-  public record LoginResult(Principals.AdminPrincipal principal, String stage, String otpauthUrl) {}
+  public record LoginResult(Principals.AdminPrincipal principal, String stage, String otpauthUrl, boolean mustChangePassword) {}
+  /** D-094: whether the stored admin account carries the must-change flag. */
+  public boolean mustChangePassword(Long adminId){
+    return admins.findById(adminId).map(a -> Boolean.TRUE.equals(a.getMustChangePassword())).orElse(false);
+  }
+  /** I-16: true when the allow-list is empty (opt-in, not configured) or the
+   *  client IP matches an active row. Rows are exact IPv4/IPv6 literals or
+   *  IPv4 CIDR ranges (e.g. 203.0.113.0/24). */
+  boolean isIpAllowed(String ip){
+    List<AdminIpAllowlist> rows = ipAllowlist.findByActiveTrue();
+    if (rows.isEmpty()) return true;
+    if (ip==null || ip.isBlank()) return false;
+    return rows.stream().anyMatch(r -> r.getCidr()!=null && ipMatchesCidr(ip.trim(), r.getCidr().trim()));
+  }
+  /** Package-private for unit tests: exact match, or IPv4 CIDR containment. */
+  static boolean ipMatchesCidr(String ip, String cidr){
+    if (cidr.contains("/")){
+      String[] parts = cidr.split("/", 2);
+      int prefix;
+      try { prefix = Integer.parseInt(parts[1]); } catch (NumberFormatException e){ return false; }
+      if (prefix<0 || prefix>32) return false;
+      long ipLong = parseIpv4(ip); long netLong = parseIpv4(parts[0]);
+      if (ipLong<0 || netLong<0) return false;
+      long mask = prefix==0 ? 0L : (0xFFFFFFFFL << (32-prefix)) & 0xFFFFFFFFL;
+      return (ipLong & mask) == (netLong & mask);
+    }
+    return ip.equals(cidr);
+  }
+  private static long parseIpv4(String ip){
+    String[] octets = ip.split("\\.", -1);
+    if (octets.length!=4) return -1;
+    long v = 0;
+    for (String o : octets){
+      int n;
+      try { n = Integer.parseInt(o); } catch (NumberFormatException e){ return -1; }
+      if (n<0 || n>255) return -1;
+      v = (v<<8) | n;
+    }
+    return v;
+  }
   public LoginResult login(String email, String password, String ip){
     if (throttle.isLocked("admin-login:"+email)) throw new Exceptions.TooManyRequests("Too many failed admin logins. Try again in 15 minutes.");
     Authentication auth;
@@ -37,17 +81,35 @@ public class AdminAuthService {
       audit.write(null, "ADMIN_LOGIN_FAILED", "ADMIN", null, "Failed admin login for "+email, Map.of(), ip);
       throw new Exceptions.BadRequest("INVALID_CREDENTIALS","Email or password is incorrect");
     }
-    throttle.recordSuccess("admin-login:"+email);
     var principal = (Principals.AdminPrincipal) auth.getPrincipal();
+    AdminAccount account = admins.findById(principal.adminId()).orElse(null);
+    // D-095: a temporary password is only good for 24 h. The password was
+    // correct (authentication already succeeded), so this is a BadRequest
+    // with a clear message, not a generic invalid-credentials failure.
+    // A Platform Admin must re-issue the credentials.
+    if (account!=null && account.getTempPasswordExpiresAt()!=null
+        && account.getTempPasswordExpiresAt().isBefore(LocalDateTime.now()))
+      throw new Exceptions.BadRequest("TEMP_PASSWORD_EXPIRED","Your temporary password has expired. Ask a Platform Admin to issue new credentials.");
+    // I-16: the admin IP allow-list (NFR-SEC-07, D-031) is enforced here, after
+    // the password is verified and before any TOTP stage is reached. It is
+    // opt-in: with no active allow-list rows every IP is allowed (previous
+    // behaviour); once a Platform Admin configures rows, only matching IPs
+    // may log in. A blocked login is audited and does not reset the throttle.
+    if (!isIpAllowed(ip)){
+      audit.write(principal.adminId(), "ADMIN_LOGIN_IP_BLOCKED", "ADMIN", principal.adminId(), "Login blocked by IP allow-list for "+ip, Map.of(), ip);
+      throw new Exceptions.Forbidden("This IP address is not allowed to sign in to the Admin Portal");
+    }
+    throttle.recordSuccess("admin-login:"+email);
     audit.write(principal.adminId(), "ADMIN_LOGIN_PASSWORD_OK", "ADMIN", principal.adminId(), null, Map.of(), ip);
-    if (!Boolean.TRUE.equals(admins.findById(principal.adminId()).map(AdminAccount::getTotpEnrolled).orElse(false))){
+    boolean mustChange = Boolean.TRUE.equals(account==null?null:account.getMustChangePassword());
+    if (!Boolean.TRUE.equals(account==null?null:account.getTotpEnrolled())){
       String secret = totp.generateSecret();
       AdminTotpSecret row = totpSecrets.findById(principal.adminId()).orElseGet(AdminTotpSecret::new);
       row.setId(principal.adminId()); row.setSecretEncrypted(AesGcm.encrypt(encryptionKey, secret));
       totpSecrets.save(row);
-      return new LoginResult(principal, "NEEDS_ENROLMENT", totp.otpauthUrl(secret, email, totpIssuer));
+      return new LoginResult(principal, "NEEDS_ENROLMENT", totp.otpauthUrl(secret, email, totpIssuer), mustChange);
     }
-    return new LoginResult(principal, "NEEDS_TOTP", null);
+    return new LoginResult(principal, "NEEDS_TOTP", null, mustChange);
   }
   @Transactional
   public List<String> enrolTotp(Long adminId, String code, String ip){
@@ -72,10 +134,36 @@ public class AdminAuthService {
       String c = String.format("%04d-%04d", rnd.nextInt(10000), rnd.nextInt(10000));
       plain.add(c);
       AdminRecoveryCode rc = new AdminRecoveryCode(); rc.setAdminId(adminId);
-      rc.setCodeHash(Hashing.sha256(c)); rc.setUsed(false); recoveryCodes.save(rc);
+      // D-096: salted Argon2id (the existing PasswordEncoder), not unsalted
+      // SHA-256. Codes expire 90 days after enrolment; re-enrolment deletes
+      // all prior codes, so it also retires them.
+      rc.setCodeHash(encoder.encode(c)); rc.setUsed(false);
+      rc.setExpiresAt(LocalDateTime.now().plus(RECOVERY_CODE_VALIDITY));
+      recoveryCodes.save(rc);
     }
     audit.write(adminId, "ADMIN_TOTP_ENROLLED", "ADMIN", adminId, null, Map.of(), ip);
     return plain;
+  }
+  /** D-093: admin password change. MFA-verified only — the controller
+   *  enforces that (AccessPolicy.requireAdmin equivalent); this service
+   *  method never runs for a merely password-authenticated principal.
+   *  Admin rule (D-031): at least 12 characters. The new password must
+   *  differ from the current one. Success clears the must-change flag and
+   *  any temporary-password expiry, invalidates every session for the
+   *  account (D-013) and is audited. */
+  @Transactional
+  public void changePassword(Long adminId, String oldPassword, String newPassword, String ip){
+    if (newPassword==null || newPassword.length()<12)
+      throw new Exceptions.BadRequest("WEAK_PASSWORD","Admin passwords must be at least 12 characters (D-031)");
+    AdminAccount a = admins.findById(adminId).orElseThrow(() -> new Exceptions.NotFound("Admin"));
+    if (oldPassword==null || !encoder.matches(oldPassword, a.getPasswordHash()))
+      throw new Exceptions.BadRequest("INVALID_CREDENTIALS","Current password is incorrect");
+    if (encoder.matches(newPassword, a.getPasswordHash()))
+      throw new Exceptions.BadRequest("SAME_PASSWORD","New password must be different from the current password");
+    a.setPasswordHash(encoder.encode(newPassword));
+    a.setMustChangePassword(false); a.setTempPasswordExpiresAt(null); admins.save(a);
+    sessions.invalidateAllSessions(a.getEmail());
+    audit.write(adminId, "ADMIN_PASSWORD_CHANGED", "ADMIN", adminId, null, Map.of(), ip);
   }
   @Transactional
   public Principals.AdminPrincipal verifyTotpOrRecovery(Long adminId, String code, String ip){
@@ -90,9 +178,18 @@ public class AdminAuthService {
       audit.write(adminId, "ADMIN_LOGIN_OK", "ADMIN", adminId, null, Map.of("mfa","totp"), ip);
       return new Principals.AdminPrincipal(a.getId(), a.getEmail(), a.getPasswordHash(), a.getRole(), a.getUniversityId(), true, Boolean.TRUE.equals(a.getActive()));
     }
-    // Recovery code (single-use, hashed)
+    // Recovery code (single-use, Argon2id-hashed, D-096). A code only counts
+    // while unused and unexpired; re-enrolment deletes all prior codes.
+    // Legacy rows still carry an unsalted SHA-256 hex digest (64 chars, no
+    // "$argon2" prefix): they can never verify under Argon2id and are
+    // skipped, i.e. pre-V010 codes are invalidated — the admin re-enrols
+    // TOTP (which issues fresh codes) or a Platform Admin resets the
+    // credentials. The prefix guard also keeps encoder.matches from
+    // throwing on a non-Argon2 hash.
     for (AdminRecoveryCode rc : recoveryCodes.findByAdminIdAndUsedFalse(adminId)){
-      if (Hashing.sha256(code).equals(rc.getCodeHash())){
+      if (isRecoveryCodeExpired(rc)) continue;
+      if (rc.getCodeHash()==null || !rc.getCodeHash().startsWith("$argon2")) continue;
+      if (encoder.matches(code, rc.getCodeHash())){
         throttle.recordSuccess(key);
         rc.setUsed(true); rc.setUsedAt(LocalDateTime.now()); recoveryCodes.save(rc);
         audit.write(adminId, "ADMIN_LOGIN_OK", "ADMIN", adminId, null, Map.of("mfa","recovery_code"), ip);
@@ -102,6 +199,15 @@ public class AdminAuthService {
     throttle.recordFailure(key);
     audit.write(adminId, "ADMIN_LOGIN_FAILED", "ADMIN", adminId, "Wrong TOTP/recovery code", Map.of("mfa","totp"), ip);
     throw new Exceptions.BadRequest("INVALID_TOTP","Incorrect authenticator or recovery code");
+  }
+  /** D-096: a recovery code is expired when its expires_at has passed, or —
+   *  for pre-V010 rows with no expires_at — when createdAt is more than 90
+   *  days old. A row with neither timestamp is treated as expired: it
+   *  predates the expiry policy and must not be trusted indefinitely. */
+  public static boolean isRecoveryCodeExpired(AdminRecoveryCode rc){
+    if (rc.getExpiresAt()!=null) return rc.getExpiresAt().isBefore(LocalDateTime.now());
+    if (rc.getCreatedAt()!=null) return rc.getCreatedAt().plus(RECOVERY_CODE_VALIDITY).isBefore(LocalDateTime.now());
+    return true;
   }
   /** Email-OTP requests are rate-limited (5 per hour per admin; the attempt
    *  that exceeds the cap locks the key for 15 minutes) so the lock can
@@ -139,7 +245,10 @@ public class AdminAuthService {
     if (row.getExpiresAt().isBefore(LocalDateTime.now())) throw new Exceptions.BadRequest("OTP_EXPIRED","Email OTP has expired.");
     if (row.getAttempts()>=5) throw new Exceptions.BadRequest("OTP_ATTEMPTS_EXCEEDED","Too many wrong attempts.");
     if (!Hashing.sha256(otp).equals(row.getOtpHash())){
-      row.setAttempts(row.getAttempts()+1); emailOtps.save(row);
+      // D-117: atomic REQUIRES_NEW increment (same D-103 bug class as the
+      // phone/password-reset OTPs) — a setAttempts+save here would roll back
+      // with the OTP_INVALID exception and the 5-attempt cap could never engage.
+      emailOtps.incrementAttempts(row.getId());
       throw new Exceptions.BadRequest("OTP_INVALID","Incorrect code");
     }
     row.setUsed(true); emailOtps.save(row);

@@ -208,7 +208,7 @@ class Phase2ServiceTest {
     var post = posts.createPost(a, "POST", "DEPARTMENT", "Titled post", "Body text", List.of());
     var c = posts.addComment(b, post.id(), "Nice post", List.of());
     assertEquals("Test P2B", c.authorName());
-    assertEquals("Test P2B", posts.listComments(post.id()).get(0).authorName());
+    assertEquals("Test P2B", posts.listComments(post.id(), a).get(0).authorName());
     posts.bookmark(b, "POST", post.id());
     var marks = posts.listBookmarks(b.userId());
     assertEquals(1, marks.size());

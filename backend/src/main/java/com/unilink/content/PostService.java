@@ -2,6 +2,7 @@ package com.unilink.content;
 import com.unilink.common.Exceptions; import com.unilink.community.FeedService;
 import com.unilink.identity.domain.*; import com.unilink.identity.repo.*;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -68,7 +69,14 @@ public class PostService {
     return authorId==null ? null : users.findById(authorId).map(User::getFullName).orElse(null);
   }
   @Transactional(readOnly=true)
-  public List<ContentDtos.CommentDto> listComments(Long postId){ return comments.findByPostIdOrderByCreatedAtAsc(postId).stream().map(c -> ContentDtos.CommentDto.from(c, authorName(c.getAuthorId()))).toList(); }
+  public List<ContentDtos.CommentDto> listComments(Long postId, Principals.UnilinkUserPrincipal p){
+    // I-15: comments now require an authenticated caller and apply the same
+    // D-016 visibility rule as getPost — previously the controller took no
+    // Authentication at all, so any authenticated student (verified or not)
+    // could read comments on any post.
+    getPost(postId, p);
+    return comments.findByPostIdOrderByCreatedAtAsc(postId).stream().map(c -> ContentDtos.CommentDto.from(c, authorName(c.getAuthorId()))).toList();
+  }
   @Transactional
   public void react(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reaction){
     policy.requireVerified(p);
@@ -78,6 +86,7 @@ public class PostService {
   }
   @Transactional
   public void unreact(Principals.UnilinkUserPrincipal p, String targetType, Long targetId){
+    policy.requireVerified(p);
     reactions.deleteByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId);
   }
   @Transactional
@@ -89,6 +98,7 @@ public class PostService {
   }
   @Transactional
   public void unbookmark(Principals.UnilinkUserPrincipal p, String targetType, Long targetId){
+    policy.requireVerified(p);
     bookmarks.deleteByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId);
   }
   @Transactional(readOnly=true)
@@ -216,6 +226,9 @@ public class PostService {
     events.findById(id).ifPresent(ev -> { ev.setArchivedAt(LocalDateTime.now()); events.save(ev); });
   }
   // ---- post attachments (FR-CNT-03): ≤10 MB image/PDF, owner attaches ----
+  // D-104: at most 5 attachments per post, enforced server-side (400 over the
+  // limit, checked BEFORE storing so a rejected file leaves no orphan).
+  // D-106: images are EXIF-stripped before storage; PDFs pass through unchanged.
   @Transactional
   public ContentDtos.AttachmentDto addPostAttachment(Principals.UnilinkUserPrincipal p, Long postId,
       String fileName, String contentType, byte[] bytes){
@@ -223,25 +236,49 @@ public class PostService {
     Post post = posts.findByIdAndAuthorId(postId, p.userId()).orElseThrow(() -> new Exceptions.NotFound("Post"));
     if (!"ACTIVE".equals(post.getStatus())) throw new Exceptions.BadRequest("POST_NOT_ACTIVE","Post is not active");
     if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
-    String sniffed = uploads.sniffContentType(bytes, contentType);
-    uploads.validateAttachment(bytes, UploadValidator.ATTACHMENT_MAX);
+    String sniffed = uploads.validateAttachment(bytes, UploadValidator.ATTACHMENT_MAX);
+    if (attachments.countByOwnerTypeAndOwnerId("POST", postId) >= UploadValidator.MAX_ATTACHMENTS_PER_POST)
+      throw new Exceptions.BadRequest("ATTACHMENT_LIMIT","A post can have at most 5 attachments");
+    byte[] stored = ExifStripper.strip(bytes);
+    String safeName = UploadValidator.sanitizeFileName(fileName);
     Attachment a = new Attachment();
     a.setOwnerType("POST"); a.setOwnerId(postId);
-    a.setStorageKey(storage.store("post-attachments", fileName, sniffed, bytes));
-    a.setFileName(fileName); a.setContentType(sniffed); a.setSizeBytes((long) bytes.length);
+    a.setStorageKey(storage.store("post-attachments", safeName, sniffed, stored));
+    a.setFileName(safeName); a.setContentType(sniffed); a.setSizeBytes((long) stored.length);
     return ContentDtos.AttachmentDto.from(attachments.save(a));
+  }
+  /** Owner-only delete (D-107): the row and its stored object are both removed,
+   *  so a deleted attachment leaves no orphaned file. A non-owner (or a wrong
+   *  post id) gets 404, never a hint the attachment exists. */
+  @Transactional
+  public void deletePostAttachment(Principals.UnilinkUserPrincipal p, Long postId, Long attachmentId){
+    policy.requireVerified(p);
+    posts.findByIdAndAuthorId(postId, p.userId()).orElseThrow(() -> new Exceptions.NotFound("Post"));
+    Attachment a = attachments.findById(attachmentId).orElseThrow(() -> new Exceptions.NotFound("Attachment"));
+    if (!"POST".equals(a.getOwnerType()) || !postId.equals(a.getOwnerId())) throw new Exceptions.NotFound("Attachment");
+    storage.delete(a.getStorageKey());
+    attachments.delete(a);
   }
   @Transactional(readOnly=true)
   public List<ContentDtos.AttachmentDto> listPostAttachments(Principals.UnilinkUserPrincipal p, Long postId){
     getPost(postId, p); // visibility check (D-016)
+    requireActivePost(postId);
     return attachments.findByOwnerTypeAndOwnerId("POST", postId).stream().map(ContentDtos.AttachmentDto::from).toList();
   }
   @Transactional(readOnly=true)
   public AttachmentFile openPostAttachment(Principals.UnilinkUserPrincipal p, Long postId, Long attachmentId){
     getPost(postId, p); // visibility check (D-016)
+    requireActivePost(postId);
     Attachment a = attachments.findById(attachmentId).orElseThrow(() -> new Exceptions.NotFound("Attachment"));
     if (!"POST".equals(a.getOwnerType()) || !postId.equals(a.getOwnerId())) throw new Exceptions.NotFound("Attachment");
     if (!storage.exists(a.getStorageKey())) throw new Exceptions.NotFound("File");
     return new AttachmentFile(a.getStorageKey(), a.getFileName(), a.getContentType());
+  }
+  /** D-107: deletePost/deleteEvent only soft-delete (status REMOVED); the files
+   *  stay so a moderation RESTORE can bring the post back, but while the post
+   *  is not ACTIVE its attachments are not listable or downloadable. */
+  private void requireActivePost(Long postId){
+    Post post = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Post"));
+    if (!"ACTIVE".equals(post.getStatus())) throw new Exceptions.NotFound("Post");
   }
 }

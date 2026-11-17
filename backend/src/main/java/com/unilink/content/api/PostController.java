@@ -39,11 +39,18 @@ public class PostController {
   @DeleteMapping("/posts/{id}") public Map<String,String> delete(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); posts.deletePost(p, id); return Map.of("status","deleted");
   }
-  /** Post attachments (FR-CNT-03): one image/PDF per call, ≤10 MB. */
+  /** Post attachments (FR-CNT-03): one image/PDF per call, ≤10 MB, max 5 per post (D-104). */
   @PostMapping(value="/posts/{id}/attachments", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
   public ContentDtos.AttachmentDto addAttachment(Authentication a, @PathVariable Long id, @RequestParam("file") MultipartFile file) throws IOException {
     var p = policy.requireStudent(a.getPrincipal());
     return posts.addPostAttachment(p, id, file.getOriginalFilename(), file.getContentType(), file.getBytes());
+  }
+  /** Owner-only attachment delete (D-107): removes the row and the stored object. */
+  @DeleteMapping("/posts/{id}/attachments/{attachmentId}")
+  public Map<String,String> deleteAttachment(Authentication a, @PathVariable Long id, @PathVariable Long attachmentId){
+    var p = policy.requireStudent(a.getPrincipal());
+    posts.deletePostAttachment(p, id, attachmentId);
+    return Map.of("status","deleted");
   }
   @GetMapping("/posts/{id}/attachments") public List<ContentDtos.AttachmentDto> attachments(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); return posts.listPostAttachments(p, id);
@@ -53,13 +60,17 @@ public class PostController {
     var p = policy.requireStudent(a.getPrincipal());
     var f = posts.openPostAttachment(p, id, attachmentId);
     return ResponseEntity.ok().contentType(MediaType.parseMediaType(f.contentType()))
-      .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\""+f.fileName().replace("\"","")+"\"")
+      // D-106: the stored file name is sanitised (no quotes/CR/LF), so it cannot
+      // break out of the quoted Content-Disposition value (header injection).
+      .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\""+com.unilink.storage.UploadValidator.sanitizeFileName(f.fileName())+"\"")
       .body(new InputStreamResource(storage.open(f.storageKey())));
   }
   @PostMapping("/posts/{id}/comments") public ContentDtos.CommentDto comment(Authentication a, @PathVariable Long id, @RequestBody CommentBody r){
     var p = policy.requireStudent(a.getPrincipal()); return posts.addComment(p, id, r.body(), r.mentionUserIds());
   }
-  @GetMapping("/posts/{id}/comments") public List<ContentDtos.CommentDto> comments(@PathVariable Long id){ return posts.listComments(id); }
+  @GetMapping("/posts/{id}/comments") public List<ContentDtos.CommentDto> comments(Authentication a, @PathVariable Long id){
+    var p = policy.requireStudent(a.getPrincipal()); return posts.listComments(id, p);
+  }
   @PostMapping("/reactions") public Map<String,String> react(Authentication a, @RequestBody TargetBody t, @RequestParam(defaultValue="LIKE") String reaction){
     var p = policy.requireStudent(a.getPrincipal()); posts.react(p, t.targetType(), t.targetId(), reaction); return Map.of("status","ok");
   }

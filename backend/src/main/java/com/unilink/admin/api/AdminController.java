@@ -2,9 +2,10 @@ package com.unilink.admin.api;
 import com.unilink.admin.AdminService; import com.unilink.admin.AdminDtos.*;
 import com.unilink.identity.dto.CatalogDtos.*; import com.unilink.identity.service.VerificationFacade;
 import com.unilink.moderation.ModerationDtos.*;
-import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.security.AccessPolicy; import com.unilink.security.IpResolver; import com.unilink.security.Principals;
 import com.unilink.storage.StorageGateway;
-import jakarta.servlet.http.HttpServletRequest; import org.springframework.core.io.InputStreamResource;
+import com.unilink.storage.UploadValidator;
+import jakarta.servlet.http.HttpServletRequest; import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*; import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
@@ -13,15 +14,16 @@ import java.util.*;
 @RestController @RequestMapping("/api/admin")
 public class AdminController {
   private final AdminService admin; private final VerificationFacade verification;
-  private final AccessPolicy policy; private final StorageGateway storage;
-  public AdminController(AdminService admin, VerificationFacade verification, AccessPolicy policy, StorageGateway storage){
-    this.admin=admin; this.verification=verification; this.policy=policy; this.storage=storage;
+  private final AccessPolicy policy; private final StorageGateway storage; private final IpResolver ipResolver;
+  private final UploadValidator uploads;
+  public AdminController(AdminService admin, VerificationFacade verification, AccessPolicy policy, StorageGateway storage, IpResolver ipResolver, UploadValidator uploads){
+    this.admin=admin; this.verification=verification; this.policy=policy; this.storage=storage; this.ipResolver=ipResolver; this.uploads=uploads;
   }
   private Principals.AdminPrincipal admin(Authentication a){ return policy.requireAdmin(a.getPrincipal()); }
-  private String ip(HttpServletRequest req){
-    String fwd = req.getHeader("X-Forwarded-For");
-    return fwd!=null ? fwd.split(",")[0].trim() : req.getRemoteAddr();
-  }
+  /** Audit IP (D-100): X-Forwarded-For is honoured only from a trusted
+   *  proxy — the old code trusted it from any client, so a caller could
+   *  forge the IP recorded in the audit log. */
+  private String ip(HttpServletRequest req){ return ipResolver.resolve(req); }
   public record ReasonBody(String reason) {}
   public record DecideBody(String action, String reason) {}
   public record ContentDecideBody(String targetType, Long targetId, String action, String reason) {}
@@ -36,16 +38,28 @@ public class AdminController {
   @PostMapping("/verification/{id}/reject") public VerificationRequestDto reject(Authentication a, @PathVariable Long id, @RequestBody ReasonBody b, HttpServletRequest req){
     return verification.reject(id, admin(a), b.reason(), ip(req));
   }
-  /** ID image: authorised stream only, never a public URL (D-053). */
+  /** ID image: authorised stream only, never a public URL (D-053).
+   *  D-106: the content type is sniffed from the stored bytes — the endpoint
+   *  used to always answer image/jpeg even for a PNG/WebP ID card. */
   @GetMapping("/verification/{id}/id-image")
-  public ResponseEntity<InputStreamResource> idImage(Authentication a, @PathVariable Long id){
+  public ResponseEntity<ByteArrayResource> idImage(Authentication a, @PathVariable Long id){
     String key = admin.verificationIdCardKey(admin(a), id); // enforces moderator scope (404 out of scope)
     if (key==null || !storage.exists(key)) throw new com.unilink.common.Exceptions.NotFound("ID image");
-    return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG)
+    byte[] bytes;
+    try { bytes = storage.open(key).readAllBytes(); }
+    catch (java.io.IOException e){ throw new IllegalStateException("Storage unavailable", e); }
+    return ResponseEntity.ok().contentType(MediaType.parseMediaType(uploads.sniffContentType(bytes, null)))
       .header("Cache-Control","no-store")
-      .body(new InputStreamResource(storage.open(key)));
+      .body(new ByteArrayResource(bytes));
   }
   @GetMapping("/users") public List<AdminUserDto> users(Authentication a, @RequestParam(required=false) String q){ return admin.listUsers(admin(a), q); }
+  /** Identity-change requests (FR-PROF-09, D-017): list + decide. */
+  @GetMapping("/identity-changes") public List<IdentityChangeRequestDto> identityChanges(Authentication a){
+    return admin.listIdentityChanges(admin(a));
+  }
+  @PostMapping("/identity-changes/{id}/decide") public IdentityChangeRequestDto decideIdentityChange(Authentication a, @PathVariable Long id, @RequestBody DecideBody b, HttpServletRequest req){
+    return admin.decideIdentityChange(admin(a), id, "ACCEPT".equalsIgnoreCase(b.action()), b.reason(), ip(req));
+  }
   @GetMapping("/users/{id}") public AdminUserDto user(Authentication a, @PathVariable Long id){ return admin.getUser(admin(a), id); }
   @PostMapping("/users/{id}/{action}") public AdminService.UserActionResult userAction(Authentication a, @PathVariable Long id, @PathVariable String action, @RequestBody ReasonBody b, HttpServletRequest req){
     return admin.changeUserState(admin(a), id, action.toUpperCase(Locale.ROOT), b.reason(), ip(req));

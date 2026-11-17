@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
@@ -104,7 +105,18 @@ class AdminAuthSecurityTest {
     for (int i = 0; i < 5; i++) auth.requestEmailOtp(a.getId());
     assertThrows(Exceptions.TooManyRequests.class, () -> auth.requestEmailOtp(a.getId()));
   }
-  @Test void emailOtpAttemptCounterSurvivesFreshRequest() {
+  // D-117: this test must NOT run inside the class-level @Transactional
+  // transaction. The email-OTP attempt counter is incremented by a
+  // REQUIRES_NEW update (D-103 bug class); inside one shared test
+  // transaction the persistence context keeps serving the stale managed
+  // row, so the carry-forward read in requestEmailOtp sees attempts=0
+  // and the cap never engages — exactly the false confidence the old
+  // code relied on. NOT_SUPPORTED gives every service call its own
+  // transaction, as in production (one per HTTP request), so re-reads
+  // see the committed counter. Data created here uses unique emails and
+  // per-admin lookups, so leaving it un-rolled-back is harmless.
+  @Test @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  void emailOtpAttemptCounterSurvivesFreshRequest() {
     AdminAccount a = adminWithSecret(true);
     auth.requestEmailOtp(a.getId());
     String real = TestProviders.EMAIL_OTPS.get(a.getEmail());

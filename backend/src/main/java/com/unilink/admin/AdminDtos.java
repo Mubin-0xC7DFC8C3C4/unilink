@@ -16,14 +16,30 @@ public final class AdminDtos {
                                        String ocrText, Double ocrMatchScore, String ocrStatus,
                                        LocalDateTime submittedAt, LocalDateTime decidedAt, Long decidedBy,
                                        LocalDateTime createdAt, String fullName, String email,
-                                       String university, String studentId, Long previousAttempts){
-    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null); }
+                                       String university, String studentId, Long previousAttempts,
+                                       Boolean duplicatePhone){
+    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null, null); }
     /** Queue enrichment: applicant identity comes from the User row, not the request. */
     public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts){
+      return from(r, u, universityName, previousAttempts, false);
+    }
+    /** Queue enrichment with the I-17 duplicate-phone flag (D-077): true when
+     *  another account shares this applicant's phone number. */
+    public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts, boolean duplicatePhone){
       return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(),
         r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(),
         r.getCreatedAt(), u==null?null:u.getFullName(), u==null?null:u.getEmail(), universityName,
-        u==null?null:u.getStudentId(), previousAttempts);
+        u==null?null:u.getStudentId(), previousAttempts, duplicatePhone);
+    }
+  }
+  public record IdentityChangeRequestDto(Long id, Long userId, String fullName, String email,
+                                         Long newUniversityId, Long newDepartmentId, String newStudentId,
+                                         String status, String reason, Long decidedBy,
+                                         LocalDateTime createdAt, LocalDateTime decidedAt){
+    public static IdentityChangeRequestDto from(IdentityChangeRequest r, User u){
+      return new IdentityChangeRequestDto(r.getId(), r.getUserId(), u==null?null:u.getFullName(), u==null?null:u.getEmail(),
+        r.getNewUniversityId(), r.getNewDepartmentId(), r.getNewStudentId(), r.getStatus(), r.getReason(),
+        r.getDecidedBy(), r.getCreatedAt(), r.getDecidedAt());
     }
   }
   public record AuditLogDto(Long id, Long actorAdminId, String action, String targetType, Long targetId,

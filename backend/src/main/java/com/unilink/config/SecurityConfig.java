@@ -1,5 +1,5 @@
 package com.unilink.config;
-import com.unilink.identity.repo.*; import com.unilink.security.Principals;
+import com.unilink.identity.repo.*; import com.unilink.security.MustChangePasswordFilter; import com.unilink.security.Principals;
 import jakarta.servlet.*; import jakarta.servlet.http.*;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -92,7 +92,8 @@ public class SecurityConfig {
       .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED).sessionFixation(sf -> sf.migrateSession()))
       .authorizeHttpRequests(a -> a.requestMatchers("/api/admin/auth/**").permitAll().anyRequest().hasAuthority("MFA_VERIFIED"))
       .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->res.sendError(401)).accessDeniedHandler((req,res,ex)->res.sendError(403)))
-      .addFilterBefore(new AdminIdleFilter(), BasicAuthenticationFilter.class);
+      .addFilterBefore(new AdminIdleFilter(), BasicAuthenticationFilter.class)
+      .addFilterBefore(new MustChangePasswordFilter(), BasicAuthenticationFilter.class);
     csrf(http); headers(http);
     return http.build();
   }
@@ -111,6 +112,9 @@ public class SecurityConfig {
         .anyRequest().authenticated())
       .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->res.sendError(401)).accessDeniedHandler((req,res,ex)->res.sendError(403)));
     csrf(http); headers(http);
+    // D-094: a session flagged must-change-password may only reach the
+    // change-password escape hatches (see MustChangePasswordFilter).
+    http.addFilterBefore(new MustChangePasswordFilter(), BasicAuthenticationFilter.class);
     return http.build();
   }
   @Bean @Order(3) public SecurityFilterChain fallbackChain(HttpSecurity http) throws Exception {

@@ -4,7 +4,9 @@ import { apiPost, errorMessage } from '../../api/client'; import { Button, Field
 const schema = z.object({ email: z.string().email('Enter a valid email address'), password: z.string().min(1,'Enter your password') });
 export default function Login(){ const nav=useNavigate(); const { setUser }=useAuth();
   const { register, handleSubmit, formState:{errors} } = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema) });
-  const mut = useMutation({ mutationFn: (d: z.infer<typeof schema>)=>apiPost<{fullName?:string; email?:string; state?:string}>('/auth/login', d), onSuccess:(data, vars)=>{ setUser({fullName:data.fullName, email: vars.email, verified: data.state==='VERIFIED'}); nav('/feed'); } });
+  const mut = useMutation({ mutationFn: (d: z.infer<typeof schema>)=>apiPost<{fullName?:string; email?:string; state?:string; mustChangePassword?:boolean}>('/auth/login', d), onSuccess:(data, vars)=>{ setUser({fullName:data.fullName, email: vars.email, verified: data.state==='VERIFIED', mustChangePassword: data.mustChangePassword===true}); // D-094/D-098: a temporary-password login goes straight to the
+    // change-password screen instead of the feed (whose calls would 403).
+    nav(data.mustChangePassword ? '/settings' : '/feed'); } });
   return <div className="container" style={{maxWidth:480}}><PageHeader eyebrow="Welcome back" title="Log in to UniLink" />
   <SessionExpiredNotice />
   <form onSubmit={handleSubmit(d=>mut.mutate(d))} noValidate><Field label="Email" error={errors.email?.message} htmlFor="email"><Input id="email" type="email" {...register('email')} autoComplete="email"/></Field>

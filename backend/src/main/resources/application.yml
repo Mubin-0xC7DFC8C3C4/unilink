@@ -74,6 +74,11 @@ app:
     login-max-attempts: 5
     login-lock: 15m
     csrf-enabled: true
+    # D-100: only these direct peers may supply X-Forwarded-For (the nginx
+    # front-end terminates on 127.0.0.1). Override with TRUSTED_PROXIES
+    # when a real load balancer / proxy sits in front; never list a
+    # client-facing address here — a listed proxy can assert any client IP.
+    trusted-proxies: ${TRUSTED_PROXIES:127.0.0.1,::1}
 logging:
   level:
     com.unilink: INFO

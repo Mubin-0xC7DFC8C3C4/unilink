@@ -3,7 +3,7 @@ import com.unilink.common.Exceptions;
 import com.unilink.identity.dto.AuthDtos.*;
 import com.unilink.identity.service.AccountDeletionService;
 import com.unilink.identity.service.AuthService;
-import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.security.AccessPolicy; import com.unilink.security.IpResolver; import com.unilink.security.Principals;
 import jakarta.servlet.http.*; import jakarta.validation.Valid;
 import org.springframework.http.*; import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,8 +15,9 @@ import java.util.Map;
 @RestController
 public class AuthController {
   private final AuthService auth; private final AccessPolicy policy; private final AccountDeletionService deletion;
+  private final IpResolver ipResolver;
   private final HttpSessionSecurityContextRepository contextRepo = new HttpSessionSecurityContextRepository();
-  public AuthController(AuthService auth, AccessPolicy policy, AccountDeletionService deletion){ this.auth=auth; this.policy=policy; this.deletion=deletion; }
+  public AuthController(AuthService auth, AccessPolicy policy, AccountDeletionService deletion, IpResolver ipResolver){ this.auth=auth; this.policy=policy; this.deletion=deletion; this.ipResolver=ipResolver; }
   private void saveAuth(HttpServletRequest req, HttpServletResponse res, Authentication a){
     SecurityContextHolder.getContext().setAuthentication(a);
     req.getSession(true); // session fixation: migrate on login via SecurityConfig
@@ -32,22 +33,27 @@ public class AuthController {
   public UserDto register(@Valid @ModelAttribute RegisterForm form){ return auth.register(form); }
   @PostMapping("/api/auth/verify-phone") public UserDto verifyPhone(@Valid @RequestBody OtpVerifyRequest r){ return auth.verifyPhone(r); }
   @PostMapping("/api/auth/otp/resend") public Map<String,String> resendOtp(@Valid @RequestBody OtpResendRequest r, HttpServletRequest req){
-    return auth.resendPhoneOtp(r.userId(), req.getRemoteAddr());
+    return auth.resendPhoneOtp(r.userId(), ipResolver.resolve(req));
   }
   @GetMapping("/api/auth/verify-email") public UserDto verifyEmail(@RequestParam String token){ return auth.verifyEmailByToken(token); }
   @PostMapping("/api/auth/login") public UserDto login(@Valid @RequestBody LoginRequest r, HttpServletRequest req, HttpServletResponse res){
-    Authentication a = auth.login(r.email(), r.password(), req.getRemoteAddr());
+    Authentication a = auth.login(r.email(), r.password(), ipResolver.resolve(req));
     saveAuth(req, res, a);
     var p = (Principals.UnilinkUserPrincipal) a.getPrincipal();
-    return AuthService.toDto(auth.getUserOr404(p.userId()));
+    // D-094: a must-change credential restricts this session (enforced by
+    // MustChangePasswordFilter) and the flag is returned so the frontend
+    // can redirect to the change-password screen.
+    boolean mustChange = auth.mustChangePassword(p.userId());
+    if (mustChange) req.getSession().setAttribute(com.unilink.security.MustChangePasswordFilter.SESSION_ATTRIBUTE, Boolean.TRUE);
+    return AuthService.toDto(auth.getUserOr404(p.userId()), mustChange);
   }
   @PostMapping("/api/auth/logout") public Map<String,String> logout(HttpServletRequest req){
     HttpSession s = req.getSession(false); if (s!=null) s.invalidate();
     SecurityContextHolder.clearContext();
     return Map.of("status","logged out");
   }
-  @PostMapping("/api/auth/password-reset/request") public Map<String,String> resetRequest(@Valid @RequestBody PasswordResetRequest r){
-    auth.requestPasswordReset(r.email()); return Map.of("status","If the email exists, a reset code was sent");
+  @PostMapping("/api/auth/password-reset/request") public Map<String,String> resetRequest(@Valid @RequestBody PasswordResetRequest r, HttpServletRequest req){
+    auth.requestPasswordReset(r.email(), ipResolver.resolve(req)); return Map.of("status","If the email exists, a reset code was sent");
   }
   @PostMapping("/api/auth/password-reset/confirm") public Map<String,String> resetConfirm(@Valid @RequestBody PasswordResetConfirm r){
     auth.confirmPasswordReset(r); return Map.of("status","Password changed. Please log in again.");
@@ -67,11 +73,11 @@ public class AuthController {
   }
   @GetMapping("/api/auth/me") public UserDto me(Authentication authn){
     var p = requireStudentPrincipal(authn);
-    return AuthService.toDto(auth.getUserOr404(p.userId()));
+    return AuthService.toDto(auth.getUserOr404(p.userId()), auth.mustChangePassword(p.userId()));
   }
   @PostMapping("/api/me/delete") public Map<String,Object> deleteMe(Authentication authn, @Valid @RequestBody DeleteAccountRequest r, HttpServletRequest req){
     var p = requireStudentPrincipal(authn);
-    deletion.deleteOwnAccount(p.userId(), r.password(), req.getRemoteAddr());
+    deletion.deleteOwnAccount(p.userId(), r.password(), ipResolver.resolve(req));
     HttpSession s = req.getSession(false); if (s!=null) s.invalidate();
     SecurityContextHolder.clearContext();
     return Map.of("deleted", true);

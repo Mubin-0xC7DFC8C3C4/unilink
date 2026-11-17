@@ -42,7 +42,10 @@ public class OtpService {
     if (row.getExpiresAt().isBefore(LocalDateTime.now())) throw new Exceptions.BadRequest("OTP_EXPIRED","OTP has expired. Request a new one.");
     if (row.getAttempts()>=5) throw new Exceptions.BadRequest("OTP_ATTEMPTS_EXCEEDED","Too many wrong attempts. Request a new OTP.");
     if (!Hashing.sha256(otp).equals(row.getOtpHash())){
-      row.setAttempts(row.getAttempts()+1); phoneOtps.save(row);
+      // Atomic REQUIRES_NEW increment (D-103): the OTP_INVALID exception
+      // below rolls back this method's transaction, which used to roll
+      // back the attempt count as well — the cap could never engage.
+      phoneOtps.incrementAttempts(row.getId());
       throw new Exceptions.BadRequest("OTP_INVALID","Incorrect code");
     }
     row.setUsed(true); phoneOtps.save(row);
@@ -83,7 +86,8 @@ public class OtpService {
     if (row.getExpiresAt().isBefore(LocalDateTime.now())) throw new Exceptions.BadRequest("OTP_EXPIRED","Reset code has expired.");
     if (row.getAttempts()>=5) throw new Exceptions.BadRequest("OTP_ATTEMPTS_EXCEEDED","Too many wrong attempts.");
     if (!Hashing.sha256(otp).equals(row.getOtpHash())){
-      row.setAttempts(row.getAttempts()+1); resetTokens.save(row);
+      // Atomic REQUIRES_NEW increment (D-103) — see verifyPhoneOtp.
+      resetTokens.incrementAttempts(row.getId());
       throw new Exceptions.BadRequest("OTP_INVALID","Incorrect code");
     }
     row.setUsed(true); resetTokens.save(row);
