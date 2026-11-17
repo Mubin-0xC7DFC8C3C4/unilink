@@ -8,5 +8,6 @@ import java.time.LocalDateTime;
 
 public interface VerificationAttemptRepository extends JpaRepository<VerificationAttempt, Long> {
   long countByUserIdAndCreatedAtAfter(Long userId, LocalDateTime since);
+  long countByUserId(Long userId);
   List<VerificationAttempt> findByUserIdOrderByCreatedAtDesc(Long userId);
 }

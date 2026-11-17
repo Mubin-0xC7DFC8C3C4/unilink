@@ -15,8 +15,16 @@ public final class AdminDtos {
   public record VerificationRequestDto(Long id, Long version, Long userId, String status, String reason,
                                        String ocrText, Double ocrMatchScore, String ocrStatus,
                                        LocalDateTime submittedAt, LocalDateTime decidedAt, Long decidedBy,
-                                       LocalDateTime createdAt){
-    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt()); }
+                                       LocalDateTime createdAt, String fullName, String email,
+                                       String university, String studentId, Long previousAttempts){
+    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null); }
+    /** Queue enrichment: applicant identity comes from the User row, not the request. */
+    public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts){
+      return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(),
+        r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(),
+        r.getCreatedAt(), u==null?null:u.getFullName(), u==null?null:u.getEmail(), universityName,
+        u==null?null:u.getStudentId(), previousAttempts);
+    }
   }
   public record AuditLogDto(Long id, Long actorAdminId, String action, String targetType, Long targetId,
                             String reason, String metadata, String ip, String prevHash, String rowHash,

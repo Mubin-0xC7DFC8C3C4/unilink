@@ -20,19 +20,19 @@ public class AdminService {
   private final AppealRepository appeals; private final SuspensionRecommendationRepository recommendations;
   private final AdminAlertRepository alerts; private final JdbcTemplate jdbc; private final AuditService audit;
   private final AccessPolicy policy; private final PasswordEncoder encoder; private final SessionService sessions;
-  private final UserCredentialRepository creds;
+  private final UserCredentialRepository creds; private final VerificationAttemptRepository attempts;
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
       AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
       DepartmentCatalogRepository catalogs, BatchRepository batches, SectorTagRepository sectors,
       AppealRepository appeals, SuspensionRecommendationRepository recommendations, AdminAlertRepository alerts,
       JdbcTemplate jdbc, AuditService audit, AccessPolicy policy, PasswordEncoder encoder, SessionService sessions,
-      UserCredentialRepository creds){
+      UserCredentialRepository creds, VerificationAttemptRepository attempts){
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
     this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
     this.appeals=appeals; this.recommendations=recommendations; this.alerts=alerts; this.jdbc=jdbc; this.audit=audit;
-    this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds;
+    this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds; this.attempts=attempts;
   }
   /** Dashboard: real SQL counts only (FR-ADM-02). Moderators see their university only. */
   @Transactional(readOnly=true)
@@ -51,12 +51,29 @@ public class AdminService {
   private long count(String sql){ Long v = jdbc.queryForObject(sql, Long.class); return v==null?0:v; }
 
   @Transactional(readOnly=true)
-  public List<VerificationRequestDto> verificationQueue(Principals.AdminPrincipal admin){
-    List<VerificationRequest> all = requests.findByStatusOrderBySubmittedAtAsc("PENDING_REVIEW");
-    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(VerificationRequestDto::from).toList();
-    Set<Long> mine = new HashSet<>();
-    users.findByUniversityId(admin.universityId()).forEach(u -> mine.add(u.getId()));
-    return all.stream().filter(r -> mine.contains(r.getUserId())).map(VerificationRequestDto::from).toList();
+  public List<VerificationRequestDto> verificationQueue(Principals.AdminPrincipal admin, String status){
+    List<VerificationRequest> all;
+    if (status==null || status.isBlank()) all = requests.findAllByOrderBySubmittedAtAsc();
+    else if ("PENDING_REVIEW".equals(status) || "APPROVED".equals(status) || "REJECTED".equals(status))
+      all = requests.findByStatusOrderBySubmittedAtAsc(status);
+    else throw new Exceptions.BadRequest("INVALID_STATUS", "Unknown verification status: " + status);
+    if (!"PLATFORM_ADMIN".equals(admin.role())){
+      Set<Long> mine = new HashSet<>();
+      users.findByUniversityId(admin.universityId()).forEach(u -> mine.add(u.getId()));
+      all = all.stream().filter(r -> mine.contains(r.getUserId())).toList();
+    }
+    Map<Long,User> byId = new HashMap<>();
+    users.findAllById(all.stream().map(VerificationRequest::getUserId).distinct().toList())
+      .forEach(u -> byId.put(u.getId(), u));
+    Map<Long,String> uniNames = new HashMap<>();
+    universities.findAllById(byId.values().stream().map(User::getUniversityId)
+        .filter(Objects::nonNull).distinct().toList())
+      .forEach(u -> uniNames.put(u.getId(), u.getName()));
+    return all.stream().map(r -> {
+      User u = byId.get(r.getUserId());
+      String uni = (u==null || u.getUniversityId()==null) ? null : uniNames.get(u.getUniversityId());
+      return VerificationRequestDto.from(r, u, uni, attempts.countByUserId(r.getUserId()));
+    }).toList();
   }
   @Transactional(readOnly=true)
   public List<AdminUserDto> listUsers(Principals.AdminPrincipal admin, String q){

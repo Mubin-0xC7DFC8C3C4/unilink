@@ -29,7 +29,7 @@ public class AdminController {
   public record MasterBody(String name, String shortName, String emailDomains, Long universityId, Long catalogId) {}
   public record ModeratorBody(String email, Long universityId, String password) {}
   @GetMapping("/dashboard") public Map<String,Object> dashboard(Authentication a){ return admin.dashboard(admin(a)); }
-  @GetMapping("/verification-queue") public List<VerificationRequestDto> queue(Authentication a){ return admin.verificationQueue(admin(a)); }
+  @GetMapping("/verification-queue") public List<VerificationRequestDto> queue(Authentication a, @RequestParam(required=false) String status){ return admin.verificationQueue(admin(a), status); }
   @PostMapping("/verification/{id}/approve") public VerificationRequestDto approve(Authentication a, @PathVariable Long id, HttpServletRequest req){
     return verification.approve(id, admin(a), ip(req));
   }
