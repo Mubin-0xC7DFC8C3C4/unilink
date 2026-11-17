@@ -31,7 +31,7 @@ public class SecurityConfig {
   @Bean("studentUserDetailsService") public UserDetailsService studentUserDetailsService(UserRepository users, UserCredentialRepository creds, DepartmentRepository depts){
     return username -> {
       var user = users.findByEmail(username).orElseThrow(() -> new UsernameNotFoundException(username));
-      var cred = creds.findByUserId(user.getId()).orElseThrow(() -> new UsernameNotFoundException(username));
+      var cred = creds.findById(user.getId()).orElseThrow(() -> new UsernameNotFoundException(username));
       Long catalogId = depts.findById(user.getDepartmentId()).map(d->d.getCatalogId()).orElse(null);
       return new Principals.UnilinkUserPrincipal(user.getId(), user.getEmail(), cred.getPasswordHash(),
         user.getUniversityId(), user.getDepartmentId(), catalogId, user.getState(), true);
@@ -49,7 +49,12 @@ public class SecurityConfig {
   @Bean("adminAuthProvider") public DaoAuthenticationProvider adminAuthProvider(@Qualifier("adminUserDetailsService") UserDetailsService uds, PasswordEncoder enc){
     DaoAuthenticationProvider p = new DaoAuthenticationProvider(); p.setUserDetailsService(uds); p.setPasswordEncoder(enc); return p;
   }
-  @Bean("studentAuthManager") public AuthenticationManager studentAuthManager(@Qualifier("studentAuthProvider") DaoAuthenticationProvider p){ return new ProviderManager(p); }
+  // @Primary: HttpSecurityConfiguration autowires a single AuthenticationManager
+  // by type (as the parent manager for the filter chains) and fails the whole
+  // context when two exist with none primary. The student manager is the
+  // default; the admin chain and AdminAuthService use adminAuthManager via
+  // @Qualifier, and each chain sets its own provider explicitly.
+  @Bean("studentAuthManager") @Primary public AuthenticationManager studentAuthManager(@Qualifier("studentAuthProvider") DaoAuthenticationProvider p){ return new ProviderManager(p); }
   @Bean("adminAuthManager") public AuthenticationManager adminAuthManager(@Qualifier("adminAuthProvider") DaoAuthenticationProvider p){ return new ProviderManager(p); }
 
   private void csrf(HttpSecurity http) throws Exception {

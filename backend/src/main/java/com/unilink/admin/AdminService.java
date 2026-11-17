@@ -111,7 +111,7 @@ public class AdminService {
       case "REACTIVATE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.VERIFIED).name()); }
       case "REVOKE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.REGISTERED).name()); }
       case "FORCE_RESET" -> {
-        UserCredential c = creds.findByUserId(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+        UserCredential c = creds.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
         String tmp = UUID.randomUUID().toString().substring(0,12)+"A1";
         c.setPasswordHash(encoder.encode(tmp)); creds.save(c);
       }

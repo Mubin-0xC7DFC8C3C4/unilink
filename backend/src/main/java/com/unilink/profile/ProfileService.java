@@ -25,7 +25,7 @@ public class ProfileService {
   public ProfileDto getProfile(Long targetUserId, Principals.UnilinkUserPrincipal viewer){
     User u = users.findById(targetUserId).orElseThrow(() -> new Exceptions.NotFound("User"));
     boolean owner = viewer!=null && viewer.userId().equals(targetUserId);
-    Profile p = profiles.findByUserId(targetUserId).orElse(null);
+    Profile p = profiles.findById(targetUserId).orElse(null);
     // Privacy: phone hidden by default; address NEVER in another user's DTO (D-016 / FR-PROF).
     String phone = (owner || (p!=null && Boolean.TRUE.equals(p.getPhoneVisible()))) ? u.getPhone() : null;
     List<String> skillNames = userSkills.findByUserId(targetUserId).stream()
@@ -39,7 +39,7 @@ public class ProfileService {
   }
   @Transactional
   public ProfileDto updateOwn(Long userId, String bio, String headline, String links, Boolean phoneVisible){
-    Profile p = profiles.findByUserId(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
+    Profile p = profiles.findById(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
     if (bio!=null) p.setBio(bio); if (headline!=null) p.setHeadline(headline);
     if (links!=null){ if (links.contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)"); p.setLinks(links); }
     if (phoneVisible!=null) p.setPhoneVisible(phoneVisible);

@@ -136,7 +136,7 @@ public class AuthService {
     checkPasswordRule(r.newPassword());
     User u = users.findByEmail(r.email()).orElseThrow(() -> new Exceptions.BadRequest("INVALID_CREDENTIALS","Email or code is incorrect"));
     otp.verifyPasswordResetOtp(u, r.otp());
-    UserCredential c = creds.findByUserId(u.getId()).orElseThrow(() -> new Exceptions.NotFound("User"));
+    UserCredential c = creds.findById(u.getId()).orElseThrow(() -> new Exceptions.NotFound("User"));
     c.setPasswordHash(encoder.encode(r.newPassword())); creds.save(c);
     sessions.invalidateAllSessions(u.getEmail());
   }
@@ -144,7 +144,7 @@ public class AuthService {
   public void changePassword(Long userId, ChangePasswordRequest r){
     checkPasswordRule(r.newPassword());
     User u = getUserOr404(userId);
-    UserCredential c = creds.findByUserId(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    UserCredential c = creds.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
     if (!encoder.matches(r.oldPassword(), c.getPasswordHash())) throw new Exceptions.BadRequest("INVALID_CREDENTIALS","Current password is incorrect");
     c.setPasswordHash(encoder.encode(r.newPassword())); creds.save(c);
     sessions.invalidateAllSessions(u.getEmail());

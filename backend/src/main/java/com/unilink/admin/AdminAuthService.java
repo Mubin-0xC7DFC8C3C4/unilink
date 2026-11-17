@@ -42,7 +42,7 @@ public class AdminAuthService {
     audit.write(principal.adminId(), "ADMIN_LOGIN_PASSWORD_OK", "ADMIN", principal.adminId(), null, Map.of(), ip);
     if (!Boolean.TRUE.equals(admins.findById(principal.adminId()).map(AdminAccount::getTotpEnrolled).orElse(false))){
       String secret = totp.generateSecret();
-      AdminTotpSecret row = totpSecrets.findByAdminId(principal.adminId()).orElseGet(AdminTotpSecret::new);
+      AdminTotpSecret row = totpSecrets.findById(principal.adminId()).orElseGet(AdminTotpSecret::new);
       row.setId(principal.adminId()); row.setSecretEncrypted(AesGcm.encrypt(encryptionKey, secret));
       totpSecrets.save(row);
       return new LoginResult(principal, "NEEDS_ENROLMENT", totp.otpauthUrl(secret, email, totpIssuer));
@@ -51,7 +51,7 @@ public class AdminAuthService {
   }
   @Transactional
   public List<String> enrolTotp(Long adminId, String code, String ip){
-    AdminTotpSecret row = totpSecrets.findByAdminId(adminId).orElseThrow(() -> new Exceptions.BadRequest("NO_TOTP_SECRET","No TOTP enrolment in progress"));
+    AdminTotpSecret row = totpSecrets.findById(adminId).orElseThrow(() -> new Exceptions.BadRequest("NO_TOTP_SECRET","No TOTP enrolment in progress"));
     String secret = AesGcm.decrypt(encryptionKey, row.getSecretEncrypted());
     if (!totp.verify(secret, code)) throw new Exceptions.BadRequest("INVALID_TOTP","Incorrect authenticator code");
     AdminAccount a = admins.findById(adminId).orElseThrow(() -> new Exceptions.NotFound("Admin"));
@@ -71,7 +71,7 @@ public class AdminAuthService {
   @Transactional
   public Principals.AdminPrincipal verifyTotpOrRecovery(Long adminId, String code, String ip){
     AdminAccount a = admins.findById(adminId).orElseThrow(() -> new Exceptions.NotFound("Admin"));
-    AdminTotpSecret row = totpSecrets.findByAdminId(adminId).orElseThrow(() -> new Exceptions.BadRequest("NO_TOTP_SECRET","TOTP is not set up"));
+    AdminTotpSecret row = totpSecrets.findById(adminId).orElseThrow(() -> new Exceptions.BadRequest("NO_TOTP_SECRET","TOTP is not set up"));
     String secret = AesGcm.decrypt(encryptionKey, row.getSecretEncrypted());
     if (totp.verify(secret, code)){
       audit.write(adminId, "ADMIN_LOGIN_OK", "ADMIN", adminId, null, Map.of("mfa","totp"), ip);

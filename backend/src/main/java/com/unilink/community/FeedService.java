@@ -35,7 +35,7 @@ public class FeedService {
   }
   public PostDto toDto(Post post){
     String name = users.findById(post.getAuthorId()).map(User::getFullName).orElse("Deleted user");
-    EventDetail ev = "EVENT".equals(post.getType()) ? events.findByPostId(post.getId()).orElse(null) : null;
+    EventDetail ev = "EVENT".equals(post.getType()) ? events.findById(post.getId()).orElse(null) : null;
     return new PostDto(post.getId(), post.getAuthorId(), name, post.getType(), post.getVisibility(),
       post.getTitle(), post.getBody(), post.getStatus(), post.getCreatedAt(),
       ev==null?null:ev.getDeadline(), ev==null?null:ev.getRegLink());

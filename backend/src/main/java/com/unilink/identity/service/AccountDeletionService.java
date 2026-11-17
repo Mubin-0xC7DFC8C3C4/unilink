@@ -40,7 +40,7 @@ public class AccountDeletionService {
     User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
     if ("DELETED".equals(u.getState()))
       throw new Exceptions.Conflict("ALREADY_DELETED", "Account is already deleted");
-    UserCredential c = creds.findByUserId(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    UserCredential c = creds.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
     if (password==null || !encoder.matches(password, c.getPasswordHash()))
       throw new Exceptions.BadRequest("INVALID_CREDENTIALS", "Password is incorrect");
     Set<String> keys = new HashSet<>();

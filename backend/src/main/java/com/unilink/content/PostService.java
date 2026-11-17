@@ -95,7 +95,7 @@ public class PostService {
     if (!List.of("INTERESTED","GOING").contains(response)) throw new Exceptions.BadRequest("INVALID_RESPONSE","Response must be INTERESTED or GOING (D-023)");
     Post post = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Post"));
     if (!"EVENT".equals(post.getType())) throw new Exceptions.BadRequest("NOT_AN_EVENT","Post is not an event");
-    EventDetail ev = events.findByPostId(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+    EventDetail ev = events.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
     if (ev.getDeadline().isBefore(LocalDateTime.now()) || ev.getArchivedAt()!=null)
       throw new Exceptions.BadRequest("EVENT_PAST","This event has ended");
     responses.findByUserIdAndPostId(p.userId(), postId).ifPresentOrElse(

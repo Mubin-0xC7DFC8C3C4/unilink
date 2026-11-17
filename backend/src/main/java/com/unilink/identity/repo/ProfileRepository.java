@@ -7,5 +7,7 @@ import java.util.*;
 import java.time.LocalDateTime;
 
 public interface ProfileRepository extends JpaRepository<Profile, Long> {
-  Optional<Profile> findByUserId(Long userId);
+  // PK is the user id itself (Profile.id maps to user_id), so the inherited
+  // findById(id) is the lookup; a derived findByUserId would reference a
+  // property that does not exist and fail context startup.
 }
