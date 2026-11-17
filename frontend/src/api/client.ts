@@ -18,6 +18,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const apiGet = <T,>(p:string)=>api<T>(p);
 export const apiPost = <T,>(p:string, data?: unknown)=>api<T>(p,{method:'POST', body: data instanceof FormData? data : data!==undefined? JSON.stringify(data): undefined});
 export const apiPatch = <T,>(p:string, data?: unknown)=>api<T>(p,{method:'PATCH', body: JSON.stringify(data)});
+export const apiPut = <T,>(p:string, data?: unknown)=>api<T>(p,{method:'PUT', body: data!==undefined? JSON.stringify(data): undefined});
 export const apiDelete = <T,>(p:string)=>api<T>(p,{method:'DELETE'});
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) { if(e.status===401) return 'You are not signed in. Please log in and try again.'; if(e.status===403) return 'You do not have permission to do that.'; if(e.status===404) return 'That item was not found. It may have been removed, or the backend endpoint is not available yet.'; if(e.status===409) return e.message||'This conflicts with existing data.'; if(e.status===422) return e.message||'The data was not accepted. Check the form and try again.'; if(e.status===429) return 'Too many requests. Please wait a moment and try again.'; if(e.status===0) return e.message; return e.message; }
