@@ -2,8 +2,7 @@
 
 Scope: audit items I-4–I-10, plus the error-handling gaps in the inventory
 (§6) and one further 401/NPE bug found during verification. No deployment
-config touched. Nothing committed yet — this report is for review before
-commit. Phase 1 commits 32ae119 and 1f59a50 are preserved.
+config touched. Phase 1 commits 32ae119 and 1f59a50 are preserved.
 
 ## Inventory (the baseline)
 
@@ -211,3 +210,46 @@ and every new I-7 endpoint. What Phase 2 proves instead: the frontend
 calls the routes the backend actually serves, with the payloads the
 backend actually expects, and the contracts are pinned by 37 backend and
 59 frontend tests.
+
+## Closure — final state (2026-11-17, verified on the committed tree)
+
+This section supersedes the snapshot numbers above, which describe the
+inventory freeze time. The verification round (`06-phase2-verification.md`)
+recomputed the contract from scratch and fixed 3 blockers + 13 should-fix
+items found in `080e763`.
+
+- **Commits.** `080e763` Phase 2: fix frontend-backend API contracts and
+  complete auth workflows (83 files). `8c0407c` Phase 2 verification fixes:
+  close scope holes and harden new endpoints (42 files). Both preserve
+  Phase 1 commits `32ae119` and `1f59a50`. Working tree clean at closure.
+- **Final API contract counts (recomputed from scratch, same counting rule:
+  distinct method + path-template pairs).** 129 frontend operations
+  (127 REST + 2 STOMP): **129 MATCH / 0 SHAPE / 0 MISMATCH**. 158 backend
+  routes (157 REST + 1 STOMP). 30 backend routes have no frontend caller
+  (legitimate admin/secondary endpoints, listed in the inventory §B).
+  No frontend request targets a nonexistent endpoint.
+- **Final test results (re-run on the committed tree at closure).**
+  Backend `mvn -o test`: **93/93 green, BUILD SUCCESS**. Frontend:
+  `npm run typecheck` clean, `npm run build` succeeds, Vitest **94/94**.
+  Playwright smoke: **2/2**. Vite dev server: landing and `/admin/login`
+  both return 200.
+- **Migration.** V009 is additive only (one nullable `closed_at` column on
+  `chat_rooms`); V001–V008 are unchanged. Verified by diff: the migration
+  directory shows only V009 added since Phase 1.
+- **Error states.** Loading, empty, unauthorized (401 → login with a
+  session-expired notice), forbidden (403), not-found (404, genuine),
+  rate-limit (429) and server-error (500, with retry) states are handled;
+  no fabricated backend responses remain.
+- **Deferred, kept deferred.** Event kind/type storage and the `WARN`
+  moderation action (D-088). No admin password-change endpoint yet.
+  Recovery codes are unsalted SHA-256 and never expire; a sole Platform
+  Admin locking themselves out has no in-code recovery; no EXIF stripping
+  on uploads; `MessagesPage` infers the room admin from `memberIds[0]`
+  (heuristic); `MessageAttachment.createdAt` is always null (cosmetic).
+- **Limitations (what Phase 2 does NOT prove).** No workflow has run
+  against a live backend. Java→MySQL interception is unchanged; Flyway
+  has still never run; `unilink_dev` has no tables; no screen has been
+  exercised against a live backend; no live-backend integration tests
+  exist (audit I-19). What Phase 2 proves instead: the frontend calls the
+  routes the backend actually serves, with the payloads the backend
+  actually expects, and the contracts are pinned by tests.
