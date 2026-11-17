@@ -1,0 +1,2 @@
+import { AdminList } from '../AdminList';
+export default function AdminEvents(){ return <AdminList<any> eyebrow="Admin Portal" title="Events moderation" lead="Review and moderate events across universities in your scope." queryKey={['admin-events']} path="/admin/events" emptyTitle="No events" emptyBody="No events to moderate." render={items=><table className="table"><thead><tr><th>Title</th><th>Type</th><th>Status</th></tr></thead><tbody>{items.map((e:any)=><tr key={e.id}><td>{e.title}</td><td>{e.type||'—'}</td><td>{e.status||'—'}</td></tr>)}</tbody></table>} />; }

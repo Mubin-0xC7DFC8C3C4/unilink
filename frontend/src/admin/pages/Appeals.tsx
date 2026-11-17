@@ -1,0 +1,6 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'; import { AdminList } from '../AdminList'; import { apiPost, errorMessage } from '../../api/client'; import { Button } from '../../design/primitives';
+export default function Appeals(){ const qc=useQueryClient();
+  const act=useMutation({ mutationFn: ({id,action}:{id:string|number;action:string})=>apiPost(`/admin/appeals/${id}/${action}`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['admin-appeals']}) });
+  return <div><AdminList<any> eyebrow="Admin Portal" title="Appeals" lead="Appeals against hiding or suspension. A suspended user can appeal without a session (appeal link)." queryKey={['admin-appeals']} path="/admin/appeals" emptyTitle="No appeals" emptyBody="No appeals are waiting." render={items=><table className="table"><thead><tr><th>Appeal</th><th>Against</th><th>Status</th><th>Actions</th></tr></thead><tbody>{items.map((a:any)=><tr key={a.id}><td>{a.id}</td><td>{a.targetType||''} {a.targetId||''}</td><td>{a.status||'—'}</td><td><Button onClick={()=>act.mutate({id:a.id,action:'uphold'})}>Uphold</Button>{' '}<Button onClick={()=>act.mutate({id:a.id,action:'overturn'})}>Overturn</Button></td></tr>)}</tbody></table>} />
+  {act.isError && <p role="alert" className="field-error">{errorMessage(act.error)}</p>}</div>;
+}

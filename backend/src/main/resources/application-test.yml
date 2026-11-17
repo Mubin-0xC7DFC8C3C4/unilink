@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/unilink_test?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC}
+    username: ${DB_USER:unilink_mig}
+    password: ${DB_PASSWORD:mig_dev_pass}
+  flyway:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/unilink_test?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC}
+    user: ${DB_MIGRATION_USER:unilink_mig}
+    password: ${DB_MIGRATION_PASSWORD:mig_dev_pass}
+    clean-disabled: false
+  jpa:
+    show-sql: false
+app:
+  security:
+    csrf-enabled: false
+springdoc:
+  swagger-ui:
+    enabled: false

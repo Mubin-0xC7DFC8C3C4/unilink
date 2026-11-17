@@ -1,0 +1,272 @@
+package com.unilink.admin;
+import com.unilink.audit.AuditService; import com.unilink.common.Exceptions;
+import com.unilink.identity.domain.*; import com.unilink.identity.repo.*;
+import com.unilink.identity.service.SessionService;
+import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import org.springframework.jdbc.core.JdbcTemplate; import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDateTime; import java.util.*;
+@Service
+public class AdminService {
+  private final UserRepository users; private final VerificationRequestRepository requests;
+  private final ReportRepository reports; private final PostRepository posts; private final CommentRepository comments;
+  private final AdminAccountRepository admins; private final AuditLogRepository auditLogs;
+  private final AnnouncementRepository announcements; private final UniversityRepository universities;
+  private final DepartmentRepository departments; private final DepartmentCatalogRepository catalogs;
+  private final BatchRepository batches; private final SectorTagRepository sectors;
+  private final AppealRepository appeals; private final SuspensionRecommendationRepository recommendations;
+  private final AdminAlertRepository alerts; private final JdbcTemplate jdbc; private final AuditService audit;
+  private final AccessPolicy policy; private final PasswordEncoder encoder; private final SessionService sessions;
+  private final UserCredentialRepository creds;
+  public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
+      PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
+      AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
+      DepartmentCatalogRepository catalogs, BatchRepository batches, SectorTagRepository sectors,
+      AppealRepository appeals, SuspensionRecommendationRepository recommendations, AdminAlertRepository alerts,
+      JdbcTemplate jdbc, AuditService audit, AccessPolicy policy, PasswordEncoder encoder, SessionService sessions,
+      UserCredentialRepository creds){
+    this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
+    this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
+    this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
+    this.appeals=appeals; this.recommendations=recommendations; this.alerts=alerts; this.jdbc=jdbc; this.audit=audit;
+    this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds;
+  }
+  /** Dashboard: real SQL counts only (FR-ADM-02). Moderators see their university only. */
+  @Transactional(readOnly=true)
+  public Map<String,Object> dashboard(Principals.AdminPrincipal admin){
+    boolean platform = "PLATFORM_ADMIN".equals(admin.role());
+    Long uni = platform ? null : admin.universityId();
+    Map<String,Object> m = new LinkedHashMap<>();
+    m.put("totalUsers", count("SELECT COUNT(*) FROM users WHERE state='VERIFIED'" + (uni==null?"":" AND university_id="+uni)));
+    m.put("pendingVerifications", count("SELECT COUNT(*) FROM verification_requests vr JOIN users u ON u.id=vr.user_id WHERE vr.status='PENDING_REVIEW'" + (uni==null?"":" AND u.university_id="+uni)));
+    m.put("reportsAwaitingReview", count("SELECT COUNT(*) FROM reports r JOIN users u ON u.id=r.reporter_id WHERE r.status='ACTIVE'" + (uni==null?"":" AND u.university_id="+uni)));
+    m.put("activeEvents", count("SELECT COUNT(*) FROM posts p JOIN event_details e ON e.post_id=p.id WHERE p.type='EVENT' AND p.status='ACTIVE' AND e.deadline>NOW()" + (uni==null?"":" AND p.scope_university_id="+uni)));
+    m.put("pendingAppeals", count("SELECT COUNT(*) FROM appeals WHERE status='PENDING'"));
+    m.put("newUsersToday", count("SELECT COUNT(*) FROM users WHERE DATE(created_at)=CURDATE()" + (uni==null?"":" AND university_id="+uni)));
+    return m;
+  }
+  private long count(String sql){ Long v = jdbc.queryForObject(sql, Long.class); return v==null?0:v; }
+
+  @Transactional(readOnly=true)
+  public List<VerificationRequest> verificationQueue(Principals.AdminPrincipal admin){
+    List<VerificationRequest> all = requests.findByStatusOrderBySubmittedAtAsc("PENDING_REVIEW");
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all;
+    Set<Long> mine = new HashSet<>();
+    users.findByUniversityId(admin.universityId()).forEach(u -> mine.add(u.getId()));
+    return all.stream().filter(r -> mine.contains(r.getUserId())).toList();
+  }
+  @Transactional(readOnly=true)
+  public List<User> listUsers(Principals.AdminPrincipal admin, String q){
+    List<User> all = (q==null||q.isBlank()) ? users.findAll() :
+      users.findAll().stream().filter(u -> u.getFullName().toLowerCase().contains(q.toLowerCase()) || u.getEmail().toLowerCase().contains(q.toLowerCase())).toList();
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all;
+    return all.stream().filter(u -> admin.universityId().equals(u.getUniversityId())).toList();
+  }
+  @Transactional(readOnly=true)
+  public User getUser(Principals.AdminPrincipal admin, Long userId){
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    policy.requireModeratorScopeOr404(admin, u.getUniversityId());
+    return u;
+  }
+  /** Suspend/ban/reactivate/revoke/force-reset — reason mandatory, sessions revoked (FR-ADM-04). */
+  @Transactional
+  public User changeUserState(Principals.AdminPrincipal admin, Long userId, String action, String reason, String ip){
+    if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
+    User u = getUser(admin, userId);
+    String from = u.getState();
+    switch (action){
+      case "SUSPEND" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name()); }
+      case "BAN" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.BANNED).name()); }
+      case "REACTIVATE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.VERIFIED).name()); }
+      case "REVOKE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.REGISTERED).name()); }
+      case "FORCE_RESET" -> {
+        UserCredential c = creds.findByUserId(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+        String tmp = UUID.randomUUID().toString().substring(0,12)+"A1";
+        c.setPasswordHash(encoder.encode(tmp)); creds.save(c);
+      }
+      default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown user action");
+    }
+    users.save(u);
+    sessions.invalidateAllSessions(u.getEmail());
+    audit.write(admin.adminId(), "USER_"+action, "USER", userId, reason, Map.of("from", from), ip);
+    return u;
+  }
+  /** Moderator recommends suspension; only a Platform Admin confirms it (D-036). */
+  @Transactional
+  public SuspensionRecommendation recommendSuspension(Principals.AdminPrincipal mod, Long userId, String reason, String ip){
+    if ("PLATFORM_ADMIN".equals(mod.role())) throw new Exceptions.BadRequest("INVALID_ROLE","Platform Admins suspend directly");
+    User u = getUser(mod, userId);
+    if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
+    SuspensionRecommendation r = new SuspensionRecommendation();
+    r.setUserId(userId); r.setModeratorId(mod.adminId()); r.setReason(reason); r.setStatus("PENDING");
+    r = recommendations.save(r);
+    audit.write(mod.adminId(), "SUSPENSION_RECOMMEND", "USER", userId, reason, Map.of("recommendationId", r.getId()), ip);
+    return r;
+  }
+  @Transactional
+  public SuspensionRecommendation decideRecommendation(Principals.AdminPrincipal admin, Long id, boolean confirm, String ip){
+    policy.requirePlatformAdmin(admin);
+    SuspensionRecommendation r = recommendations.findById(id).orElseThrow(() -> new Exceptions.NotFound("Recommendation"));
+    if (!"PENDING".equals(r.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Recommendation already decided");
+    r.setStatus(confirm?"CONFIRMED":"DECLINED"); r.setDecidedBy(admin.adminId()); r.setDecidedAt(LocalDateTime.now());
+    recommendations.save(r);
+    if (confirm){
+      User u = users.findById(r.getUserId()).orElseThrow(() -> new Exceptions.NotFound("User"));
+      u.setState(com.unilink.identity.domain.AccountState.of(u.getState()).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name());
+      users.save(u); sessions.invalidateAllSessions(u.getEmail());
+    }
+    audit.write(admin.adminId(), "SUSPENSION_RECOMMEND_"+r.getStatus(), "USER", r.getUserId(), r.getReason(), Map.of("recommendationId", r.getId()), ip);
+    return r;
+  }
+  // ---- moderation decisions (ModerationFacade behaviour) ----
+  @Transactional
+  public void decideContent(Principals.AdminPrincipal admin, String targetType, Long targetId, String action, String reason, String ip){
+    if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
+    switch (targetType){
+      case "POST", "EVENT" -> {
+        Post p = posts.findById(targetId).orElseThrow(() -> new Exceptions.NotFound("Post"));
+        policy.requireModeratorScopeOr404(admin, p.getScopeUniversityId());
+        p.setStatus(switch (action){ case "HIDE" -> "HIDDEN_ADMIN"; case "REMOVE" -> "REMOVED";
+          case "RESTORE" -> "ACTIVE"; case "EDIT_REQUEST" -> "EDIT_REQUESTED"; default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown action"); });
+        posts.save(p);
+      }
+      case "COMMENT" -> {
+        Comment c = comments.findById(targetId).orElseThrow(() -> new Exceptions.NotFound("Comment"));
+        c.setStatus(switch (action){ case "HIDE" -> "HIDDEN_ADMIN"; case "REMOVE" -> "REMOVED";
+          case "RESTORE" -> "ACTIVE"; case "EDIT_REQUEST" -> "EDIT_REQUESTED"; default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown action"); });
+        comments.save(c);
+      }
+      default -> throw new Exceptions.BadRequest("INVALID_TARGET","Unknown target");
+    }
+    audit.write(admin.adminId(), "CONTENT_"+action, targetType, targetId, reason, Map.of(), ip);
+  }
+  @Transactional
+  public Appeal decideAppeal(Principals.AdminPrincipal admin, Long appealId, boolean accept, String reason, String ip){
+    if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
+    Appeal a = appeals.findById(appealId).orElseThrow(() -> new Exceptions.NotFound("Appeal"));
+    if (!"PENDING".equals(a.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Appeal already decided");
+    a.setStatus(accept?"ACCEPTED":"REJECTED"); a.setDecidedBy(admin.adminId()); a.setDecisionReason(reason);
+    a.setDecidedAt(LocalDateTime.now()); appeals.save(a);
+    if (accept && ("POST".equals(a.getTargetType()) || "EVENT".equals(a.getTargetType()))){
+      posts.findById(a.getTargetId()).ifPresent(p -> { if (!"REMOVED".equals(p.getStatus())){ p.setStatus("ACTIVE"); posts.save(p); } });
+    }
+    audit.write(admin.adminId(), "APPEAL_"+(accept?"ACCEPT":"REJECT"), "APPEAL", appealId, reason, Map.of(), ip);
+    return a;
+  }
+  @Transactional(readOnly=true)
+  public List<Report> moderationQueue(Principals.AdminPrincipal admin){
+    // Ordered by report count then age (FR-ADM-05): group by target, count desc, oldest first.
+    List<Report> all = reports.findByStatusOrderByCreatedAtAsc("ACTIVE");
+    Map<String,Long> counts = new HashMap<>();
+    for (Report r : all) counts.merge(r.getTargetType()+":"+r.getTargetId(), 1L, Long::sum);
+    all.sort(Comparator.comparingLong((Report r) -> counts.get(r.getTargetType()+":"+r.getTargetId())).reversed()
+      .thenComparing(Report::getCreatedAt));
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all;
+    return all.stream().filter(r -> {
+      Long uni = switch (r.getTargetType()){
+        case "POST","EVENT" -> posts.findById(r.getTargetId()).map(Post::getScopeUniversityId).orElse(null);
+        case "COMMENT" -> comments.findById(r.getTargetId()).map(c -> posts.findById(c.getPostId()).map(Post::getScopeUniversityId).orElse(null)).orElse(null);
+        case "USER" -> users.findById(r.getTargetId()).map(User::getUniversityId).orElse(null);
+        default -> null;
+      };
+      return admin.universityId().equals(uni);
+    }).toList();
+  }
+  // ---- announcements (D-039) ----
+  @Transactional
+  public Announcement createAnnouncement(Principals.AdminPrincipal admin, String title, String body, String scope, Long universityId, LocalDateTime expiresAt, String ip){
+    if ("UNIVERSITY".equals(scope) && !"PLATFORM_ADMIN".equals(admin.role())) policy.requireModeratorScopeOr404(admin, universityId);
+    Announcement a = new Announcement(); a.setAdminId(admin.adminId()); a.setTitle(title); a.setBody(body);
+    a.setScope(scope); a.setUniversityId("GLOBAL".equals(scope)?null:universityId); a.setExpiresAt(expiresAt); a.setActive(true);
+    a = announcements.save(a);
+    audit.write(admin.adminId(), "ANNOUNCEMENT_CREATE", "ANNOUNCEMENT", a.getId(), null, Map.of("scope", scope), ip);
+    return a;
+  }
+  @Transactional(readOnly=true)
+  public List<Announcement> activeAnnouncements(Principals.UnilinkUserPrincipal p){
+    return announcements.findByActiveTrueOrderByCreatedAtDesc().stream()
+      .filter(a -> (a.getExpiresAt()==null || a.getExpiresAt().isAfter(LocalDateTime.now()))
+        && ("GLOBAL".equals(a.getScope()) || (p.universityId()!=null && p.universityId().equals(a.getUniversityId()))))
+      .toList();
+  }
+  // ---- master data (FR-ADM-10): deactivate, never hard-delete referenced rows ----
+  @Transactional public University createUniversity(Principals.AdminPrincipal admin, String name, String shortName, String domains, String ip){
+    policy.requirePlatformAdmin(admin);
+    University u = new University(); u.setName(name); u.setShortName(shortName); u.setEmailDomains(domains); u.setActive(true);
+    u = universities.save(u); audit.write(admin.adminId(),"MASTERDATA_CREATE","UNIVERSITY",u.getId(),null,Map.of(),ip); return u;
+  }
+  @Transactional public Department createDepartment(Principals.AdminPrincipal admin, Long universityId, Long catalogId, String name, String ip){
+    policy.requirePlatformAdmin(admin);
+    Department d = new Department(); d.setUniversityId(universityId); d.setCatalogId(catalogId); d.setName(name); d.setActive(true);
+    d = departments.save(d); audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT",d.getId(),null,Map.of(),ip); return d;
+  }
+  @Transactional public SectorTag createSector(Principals.AdminPrincipal admin, String name, String ip){
+    policy.requirePlatformAdmin(admin);
+    SectorTag s = new SectorTag(); s.setName(name); s.setActive(true);
+    s = sectors.save(s); audit.write(admin.adminId(),"MASTERDATA_CREATE","SECTOR",s.getId(),null,Map.of(),ip); return s;
+  }
+  // ---- moderator management (FR-ADM-12) ----
+  @Transactional
+  public AdminAccount createModerator(Principals.AdminPrincipal admin, String email, Long universityId, String password, String ip){
+    policy.requirePlatformAdmin(admin);
+    if (password==null || password.length()<12) throw new Exceptions.BadRequest("WEAK_PASSWORD","Admin passwords must be at least 12 characters (D-031)");
+    if (admins.findByEmail(email).isPresent()) throw new Exceptions.Conflict("EMAIL_TAKEN","Admin email already exists");
+    AdminAccount a = new AdminAccount(); a.setEmail(email); a.setPasswordHash(encoder.encode(password));
+    a.setRole("UNIVERSITY_MODERATOR"); a.setUniversityId(universityId); a.setActive(true); a.setTotpEnrolled(false);
+    a = admins.save(a);
+    audit.write(admin.adminId(), "MODERATOR_CREATE", "ADMIN", a.getId(), null, Map.of("universityId", universityId), ip);
+    return a;
+  }
+  @Transactional
+  public void deactivateAdmin(Principals.AdminPrincipal admin, Long adminId, String reason, String ip){
+    policy.requirePlatformAdmin(admin);
+    AdminAccount a = admins.findById(adminId).orElseThrow(() -> new Exceptions.NotFound("Admin"));
+    a.setActive(false); admins.save(a);
+    sessions.invalidateAllSessions(a.getEmail());
+    audit.write(admin.adminId(), "ADMIN_DEACTIVATE", "ADMIN", adminId, reason, Map.of(), ip);
+  }
+  // ---- analytics: SQL aggregates only (FR-ADM-13) ----
+  @Transactional(readOnly=true)
+  public Map<String,Object> analytics(Principals.AdminPrincipal admin){
+    boolean platform = "PLATFORM_ADMIN".equals(admin.role());
+    Long uni = platform ? null : admin.universityId();
+    String u = uni==null?"":" AND university_id="+uni;
+    Map<String,Object> m = new LinkedHashMap<>();
+    m.put("usersByState", jdbc.queryForList("SELECT state, COUNT(*) c FROM users WHERE 1=1"+u+" GROUP BY state"));
+    m.put("usersPerDay30", jdbc.queryForList("SELECT DATE(created_at) d, COUNT(*) c FROM users WHERE created_at>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)"+u+" GROUP BY DATE(created_at) ORDER BY d"));
+    m.put("eventsPerSector", jdbc.queryForList("SELECT st.name sector, COUNT(*) c FROM post_sector_tags pst JOIN sector_tags st ON st.id=pst.sector_tag_id JOIN posts p ON p.id=pst.post_id WHERE p.type='EVENT' GROUP BY st.name"));
+    m.put("verificationTurnaroundHours", jdbc.queryForObject("SELECT AVG(TIMESTAMPDIFF(HOUR, submitted_at, decided_at)) FROM verification_requests WHERE decided_at IS NOT NULL", Double.class));
+    m.put("activeUniversities", jdbc.queryForObject("SELECT COUNT(DISTINCT university_id) FROM users WHERE state='VERIFIED'", Long.class));
+    return m;
+  }
+  @Transactional(readOnly=true)
+  public List<AuditLog> auditLogs(Principals.AdminPrincipal admin, int limit){
+    // Moderators see only their university's actions: audit rows carry no university, so moderators see
+    // only rows whose target is a user of their university or their own actions. (Documented limitation.)
+    List<AuditLog> all = auditLogs.findAll(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC,"id"));
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().limit(limit).toList();
+    return all.stream().filter(l -> admin.adminId().equals(l.getActorAdminId())
+      || ("USER".equals(l.getTargetType()) && l.getTargetId()!=null && users.findById(l.getTargetId()).map(x->admin.universityId().equals(x.getUniversityId())).orElse(false)))
+      .limit(limit).toList();
+  }
+  /** Overdue alerts job helper (D-038): one alert per overdue request, idempotent. */
+  @Transactional
+  public int createOverdueAlerts(){
+    int created = 0;
+    int hours = 48;
+    LocalDateTime cutoff = LocalDateTime.now().minusHours(hours);
+    for (VerificationRequest r : requests.findByStatusOrderBySubmittedAtAsc("PENDING_REVIEW")){
+      if (r.getSubmittedAt()!=null && r.getSubmittedAt().isAfter(cutoff)) continue;
+      User u = users.findById(r.getUserId()).orElse(null); if (u==null) continue;
+      List<AdminAccount> mods = admins.findByRoleAndUniversityId("UNIVERSITY_MODERATOR", u.getUniversityId());
+      List<AdminAccount> targets = mods.isEmpty() ? admins.findByRole("PLATFORM_ADMIN") : mods;
+      for (AdminAccount a : targets){
+        if (alerts.existsByTypeAndTargetTypeAndTargetIdAndAdminId("VERIFICATION_OVERDUE","VERIFICATION_REQUEST",r.getId(),a.getId())) continue;
+        AdminAlert al = new AdminAlert(); al.setAdminId(a.getId()); al.setUniversityId(u.getUniversityId());
+        al.setType("VERIFICATION_OVERDUE"); al.setTargetType("VERIFICATION_REQUEST"); al.setTargetId(r.getId());
+        al.setMessage("Verification request #"+r.getId()+" is overdue (>48h)"); alerts.save(al); created++;
+      }
+    }
+    return created;
+  }
+}

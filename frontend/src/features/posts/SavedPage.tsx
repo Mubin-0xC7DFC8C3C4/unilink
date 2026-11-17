@@ -1,0 +1,2 @@
+import { ListPage } from '../shared'; import { RuledList } from '../../design/primitives'; import { Link } from 'react-router-dom';
+export default function SavedPage(){ return <ListPage<any> eyebrow="Bookmarks" title="Saved" lead="Posts and events you bookmarked." queryKey={['bookmarks']} path="/bookmarks" emptyTitle="Nothing saved yet" emptyBody="Bookmark a post or event and it will appear here." render={items=><RuledList>{items.map((b:any)=><li key={b.id}><Link to={`/posts/${b.targetId||b.id}`}>{b.title||`Saved item ${b.targetId||b.id}`}</Link></li>)}</RuledList>} />; }

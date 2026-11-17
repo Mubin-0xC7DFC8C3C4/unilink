@@ -1,0 +1,13 @@
+package com.unilink.identity.repo;
+import com.unilink.identity.domain.*;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.domain.Pageable;
+import java.util.*;
+import java.time.LocalDateTime;
+
+public interface PostRepository extends JpaRepository<Post, Long>, JpaSpecificationExecutor<Post> {
+  Optional<Post> findByIdAndAuthorId(Long id, Long authorId);
+  List<Post> findByAuthorIdOrderByCreatedAtDesc(Long authorId, Pageable pageable);
+  long countByStatus(String status);
+}

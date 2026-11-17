@@ -1,0 +1,25 @@
+# PROD: fail fast on missing values — every variable below has NO default.
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+  flyway:
+    url: ${DB_URL}
+    user: ${DB_MIGRATION_USER}
+    password: ${DB_MIGRATION_PASSWORD}
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
+app:
+  encryption-key: ${ENCRYPTION_KEY}
+logging:
+  level:
+    com.unilink: INFO

@@ -1,0 +1,29 @@
+# UniLink dev compose (for later use — Docker is NOT installed in the build VM; the app runs
+# directly with ./mvnw spring-boot:run against the local MySQL, see docs/phase-reports/backend.md).
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root_dev_pass
+      MYSQL_DATABASE: unilink_dev
+      MYSQL_USER: unilink_app
+      MYSQL_PASSWORD: app_dev_pass
+    ports: ["3306:3306"]
+    volumes: [mysql-data:/var/lib/mysql]
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+  mailcatcher:
+    image: sj26/mailcatcher:latest
+    ports: ["1025:1025", "1080:1080"]
+  backend:
+    build: ../backend
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DB_URL: jdbc:mysql://mysql:3306/unilink_dev?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
+      DB_USER: unilink_app
+      DB_PASSWORD: app_dev_pass
+      DB_MIGRATION_USER: root
+      DB_MIGRATION_PASSWORD: root_dev_pass
+    ports: ["8080:8080"]
+    depends_on: [mysql, mailcatcher]
+volumes:
+  mysql-data:

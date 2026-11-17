@@ -1,0 +1,11 @@
+import { useState } from 'react'; import { useMutation } from '@tanstack/react-query'; import { apiPost, errorMessage } from '../../api/client';
+import { Button, Field, Input, PageHeader } from '../../design/primitives';
+export default function ForgotPassword(){ const [email,setEmail]=useState(''); const [code,setCode]=useState(''); const [pw,setPw]=useState(''); const [step,setStep]=useState(1);
+  const forgot = useMutation({ mutationFn: ()=>apiPost('/auth/password/forgot',{email}), onSuccess: ()=>setStep(2) });
+  const verify = useMutation({ mutationFn: ()=>apiPost('/auth/password/verify-otp',{email, code}), onSuccess: ()=>setStep(3) });
+  const reset = useMutation({ mutationFn: ()=>apiPost('/auth/password/reset',{email, code, newPassword: pw}), onSuccess: ()=>setStep(4) });
+  return <div className="container" style={{maxWidth:480}}><PageHeader eyebrow="Account recovery" title="Forgot password" lead="Request a reset code, verify it, then choose a new password. Signing in after a reset ends other sessions." />
+  {step===1 && <form onSubmit={e=>{e.preventDefault(); forgot.mutate();}}><Field label="Email" htmlFor="email"><Input id="email" type="email" value={email} onChange={e=>setEmail(e.target.value)} /></Field>{forgot.isError && <p role="alert" className="field-error">{errorMessage(forgot.error)}</p>}<Button variant="primary" type="submit">Send reset code</Button></form>}
+  {step===2 && <form onSubmit={e=>{e.preventDefault(); verify.mutate();}}><Field label="Reset code" htmlFor="code"><Input id="code" value={code} onChange={e=>setCode(e.target.value)} /></Field>{verify.isError && <p role="alert" className="field-error">{errorMessage(verify.error)}</p>}<Button variant="primary" type="submit">Verify code</Button></form>}
+  {step===3 && <form onSubmit={e=>{e.preventDefault(); reset.mutate();}}><Field label="New password (8+ characters, upper, lower, digit)" htmlFor="pw"><Input id="pw" type="password" value={pw} onChange={e=>setPw(e.target.value)} /></Field>{reset.isError && <p role="alert" className="field-error">{errorMessage(reset.error)}</p>}<Button variant="primary" type="submit">Reset password</Button></form>}
+  {step===4 && <p role="status">Your password has been reset. You can now log in.</p>}</div>; }

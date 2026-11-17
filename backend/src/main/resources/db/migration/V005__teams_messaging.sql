@@ -1,0 +1,74 @@
+-- V005 teams (D-026) + messaging (D-022, D-029)
+CREATE TABLE IF NOT EXISTS teams (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, event_post_id BIGINT UNSIGNED NOT NULL,
+  creator_id BIGINT UNSIGNED NOT NULL, name VARCHAR(255) NOT NULL,
+  max_size INT NOT NULL DEFAULT 4, status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
+  version BIGINT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id), INDEX idx_team_event (event_post_id),
+  CONSTRAINT fk_team_event FOREIGN KEY (event_post_id) REFERENCES posts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_team_creator FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS team_members (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, team_id BIGINT UNSIGNED NOT NULL,
+  event_post_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL,
+  joined_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id), UNIQUE KEY uk_team_member (team_id, user_id),
+  UNIQUE KEY uk_team_event_user (event_post_id, user_id),
+  CONSTRAINT fk_tm_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS team_join_requests (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, team_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+  message VARCHAR(512) NULL, created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  decided_at DATETIME(3) NULL,
+  PRIMARY KEY (id), UNIQUE KEY uk_team_req (team_id, user_id, status),
+  CONSTRAINT fk_tjr_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tjr_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS chat_rooms (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, public_id CHAR(36) NOT NULL,
+  type VARCHAR(32) NOT NULL, name VARCHAR(255) NULL,
+  department_id BIGINT UNSIGNED NULL, university_id BIGINT UNSIGNED NULL,
+  team_id BIGINT UNSIGNED NULL, created_by BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id), UNIQUE KEY uk_room_public (public_id),
+  INDEX idx_room_type (type, university_id, department_id),
+  CONSTRAINT fk_room_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS room_members (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, room_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL, role VARCHAR(32) NOT NULL DEFAULT 'MEMBER',
+  muted_until DATETIME(3) NULL, last_read_message_id BIGINT UNSIGNED NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id), UNIQUE KEY uk_room_member (room_id, user_id),
+  INDEX idx_roommember_user (user_id, room_id),
+  CONSTRAINT fk_rm_room FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
+  CONSTRAINT fk_rm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS messages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, public_id CHAR(36) NOT NULL,
+  room_id BIGINT UNSIGNED NOT NULL, sender_id BIGINT UNSIGNED NULL,
+  body MEDIUMTEXT NOT NULL, idempotency_key VARCHAR(128) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id), UNIQUE KEY uk_msg_public (public_id),
+  UNIQUE KEY uk_msg_idem (room_id, idempotency_key),
+  INDEX idx_msg_room (room_id, id),
+  CONSTRAINT fk_msg_room FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
+  CONSTRAINT fk_msg_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS message_attachments (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, message_id BIGINT UNSIGNED NOT NULL,
+  storage_key VARCHAR(512) NOT NULL, file_name VARCHAR(255) NOT NULL,
+  content_type VARCHAR(128) NOT NULL, size_bytes BIGINT NOT NULL,
+  PRIMARY KEY (id), INDEX idx_msgatt_msg (message_id),
+  CONSTRAINT fk_msgatt_msg FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS user_blocks (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, blocker_id BIGINT UNSIGNED NOT NULL,
+  blocked_id BIGINT UNSIGNED NOT NULL, created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id), UNIQUE KEY uk_block (blocker_id, blocked_id),
+  CONSTRAINT fk_block_blocker FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_block_blocked FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

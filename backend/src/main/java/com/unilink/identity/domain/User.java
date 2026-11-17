@@ -1,0 +1,25 @@
+package com.unilink.identity.domain;
+import jakarta.persistence.*;import lombok.*;import java.time.LocalDateTime;
+
+@Entity @Table(name="users") @Getter @Setter @NoArgsConstructor
+@AllArgsConstructor
+public class User {
+  @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id;
+  @Version private Long version;
+  @Column(name="university_id") private Long universityId;
+  @Column(name="department_id") private Long departmentId;
+  @Column(name="batch_id") private Long batchId;
+  @Column(name="full_name", nullable=false) private String fullName;
+  @Column(name="email", nullable=false) private String email;
+  @Column(name="phone") private String phone;
+  @Column(name="address") private String address;
+  @Column(name="student_id") private String studentId;
+  @Column(name="state") private String state;
+  @Column(name="phone_verified_at") private LocalDateTime phoneVerifiedAt;
+  @Column(name="email_verified_at") private LocalDateTime emailVerifiedAt;
+  @Column(name="profile_photo_key") private String profilePhotoKey;
+  @Column(name="id_card_key") private String idCardKey;
+  @Column(name="created_at") private LocalDateTime createdAt;
+  @Column(name="updated_at") private LocalDateTime updatedAt;
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+}

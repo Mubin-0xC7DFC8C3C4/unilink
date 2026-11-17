@@ -1,0 +1,6 @@
+import { useState } from 'react'; import { AdminList } from '../AdminList';
+const TABS=[['universities','Universities'],['department-catalog','Department catalog'],['departments','Departments'],['batches','Batches'],['sectors','Sectors']] as const;
+export default function MasterData(){ const [tab,setTab]=useState<string>('universities');
+  return <div><div role="tablist" aria-label="Master data" style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{TABS.map(([k,label])=><button key={k} role="tab" aria-selected={tab===k} className={tab===k?'btn btn-primary btn-sm':'btn btn-sm'} onClick={()=>setTab(k)}>{label}</button>)}</div>
+  <AdminList<any> eyebrow="Admin Portal" title="Master data" lead="Universities (with email domains), department catalog, departments, batches and sector tags. Referenced rows are deactivated, never hard-deleted." queryKey={['admin-master',tab]} path={`/admin/${tab}`} emptyTitle="No rows" emptyBody="No rows in this table yet." render={items=><table className="table"><thead><tr><th>Name</th><th>Detail</th><th>Active</th></tr></thead><tbody>{items.map((r:any)=><tr key={r.id}><td>{r.name||r.title||r.id}</td><td>{r.emailDomains?.join(', ')||r.code||''}</td><td>{r.active===false?'No':'Yes'}</td></tr>)}</tbody></table>} /></div>;
+}
