@@ -35,7 +35,7 @@ export default function Feed(){
     <div style={{marginTop:8}}><Button type="submit" variant="primary" disabled={composer.isPending || !title.trim() || !body.trim()}>Post</Button></div></form></section>
   {q.isPending?<Skeleton/>:q.isError?<ErrorState message={errorMessage(q.error)} onRetry={()=>q.refetch()}/>
   :items.length===0?<EmptyState title="No posts yet" body="Nothing has been posted at this level yet. Be the first to post, or try another level."/>
-  :<><ul className="ruled-list">{items.map(p=><li key={p.id}><Link to={`/posts/${p.id}`} style={{textDecoration:'none'}}><strong>{p.title||'Untitled post'}</strong></Link><p className="secondary">{p.body||p.content||''}</p><p className="body-sm secondary">{p.authorName||p.author?.fullName||'Student'} {p.sector?<Pill>{p.sector}</Pill>:null} {p.commentCount!=null?`· ${p.commentCount} comments`:''}</p></li>)}</ul>
+  :<><ul className="ruled-list">{items.map(p=><li key={p.id}><Link to={`/posts/${p.id}`} style={{textDecoration:'none'}}><strong>{p.title||'Untitled post'}</strong></Link><p className="secondary">{p.body||''}</p><p className="body-sm secondary">{p.authorName||p.author?.fullName||'Student'} {(p.sectors||[]).map(s=><Pill key={s}>{s}</Pill>)} {p.commentCount!=null?`· ${p.commentCount} comments`:''}</p></li>)}</ul>
   <div style={{display:'flex',gap:8,marginTop:16}}><Button disabled={cursors.length<=1} onClick={()=>{const prev=[...cursors]; prev.pop(); setCursors(prev); setCursor(prev[prev.length-1]);}}>Previous</Button><Button disabled={!q.data?.nextCursor} onClick={()=>{const n=q.data!.nextCursor!; setCursors([...cursors,n]); setCursor(n);}}>Next →</Button></div></>}
   </div>;
 }

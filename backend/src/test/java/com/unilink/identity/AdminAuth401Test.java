@@ -21,7 +21,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
   "spring.datasource.password=",
   "spring.flyway.enabled=false",
   "spring.jpa.hibernate.ddl-auto=create-drop",
-  "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect"
+  "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
+  // H2 test DBs have no SPRING_SESSION tables (Flyway is disabled here);
+  // without this, any request that creates a session fails (see
+  // AuthController401Test, which carries the same property).
+  "spring.session.jdbc.initialize-schema=always"
 })
 class AdminAuth401Test {
   @Autowired MockMvc mvc;

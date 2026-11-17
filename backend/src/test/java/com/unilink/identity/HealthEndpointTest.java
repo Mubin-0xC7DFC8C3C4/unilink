@@ -41,10 +41,10 @@ class HealthEndpointTest {
   @Test void unauthenticatedProtectedEndpointIsStill401() throws Exception {
     // Control: auth is still enforced on a genuinely protected endpoint.
     // (Deliberately NOT /api/auth/me: it is under the permitAll /api/auth/**
-    //  matcher and dereferences a null Authentication in AuthController.me,
-    //  so it 500s with an NPE today — a real bug of the same class as the
-    //  admin-TOTP NPE, reported to the parent; fixing AuthController is
-    //  outside this worker's backend scope, which is the health decision.)
+    //  matcher, but AuthController.me now guards its null Authentication
+    //  and answers 401 instead of 500 — the NPE was fixed in Phase 2
+    //  (D-090), so /api/auth/me would be a valid control too; /api/profiles/me
+    //  is kept here as the non-auth-namespaced control.)
     mvc.perform(get("/api/profiles/me"))
       .andExpect(status().isUnauthorized());
   }

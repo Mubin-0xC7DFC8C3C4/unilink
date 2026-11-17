@@ -8,6 +8,7 @@ import com.unilink.identity.repo.*;
 import com.unilink.messaging.MessagingService;
 import com.unilink.profile.ProfileService;
 import com.unilink.security.Principals;
+import com.unilink.team.TeamService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +47,8 @@ class Phase2ServiceTest {
   @Autowired MessagingService messaging;
   @Autowired PostService posts;
   @Autowired ProfileService profiles;
+  @Autowired TeamService teams;
+  @Autowired EventDetailRepository eventDetails;
   @Autowired AdminService admin;
   @Autowired PasswordEncoder encoder;
   @Autowired UserRepository users;
@@ -54,6 +57,7 @@ class Phase2ServiceTest {
   @Autowired PostSectorTagRepository postSectors;
   @Autowired AdminAccountRepository admins;
   @Autowired PostRepository postRepo;
+  @Autowired EventDetailRepository events;
   @Autowired ChatRoomRepository rooms;
   @Autowired MessageRepository messageRepo;
   @Autowired JdbcTemplate jdbc;
@@ -136,6 +140,85 @@ class Phase2ServiceTest {
     assertEquals("REMOVED", postRepo.findById(created.id()).orElseThrow().getStatus());
   }
 
+  /** B1: the event-time subquery must be correlated to the outer post. With two
+   *  events — one past-deadline, one upcoming — each list must exclude the other.
+   *  (A single-event test passes vacuously: with one event the uncorrelated
+   *  `id IN (subquery)` happens to agree.) */
+  @Test void eventListsSeparatePastAndUpcoming() {
+    fixtureWithStudents();
+    var a = principal(user("phase2-a@example.com"));
+    var upcoming = posts.createEvent(a, "DEPARTMENT", "Upcoming event", "Body text",
+      LocalDateTime.now().plusDays(3), null, null, List.of());
+    var pastEv = posts.createEvent(a, "DEPARTMENT", "Past event", "Body text",
+      LocalDateTime.now().plusDays(3), null, null, List.of());
+    EventDetail d = events.findById(pastEv.id()).orElseThrow();
+    d.setDeadline(LocalDateTime.now().minusDays(1));
+    events.save(d);
+    var up = posts.listEvents(a, false);
+    assertTrue(up.stream().anyMatch(e -> e.id().equals(upcoming.id())), "upcoming list must contain the upcoming event");
+    assertTrue(up.stream().noneMatch(e -> e.id().equals(pastEv.id())), "upcoming list must NOT contain the past event");
+    var past = posts.listEvents(a, true);
+    assertTrue(past.stream().anyMatch(e -> e.id().equals(pastEv.id())), "past list must contain the past event");
+    assertTrue(past.stream().noneMatch(e -> e.id().equals(upcoming.id())), "past list must NOT contain the upcoming event");
+  }
+
+  /** F1: activity() must apply the caller's visibility scope. An unverified
+   *  caller sees only NATIONAL posts of another user — DEPARTMENT/UNIVERSITY
+   *  posts stay hidden — while a verified caller in scope sees all three. */
+  @Test void activityHidesNonNationalPostsFromUnverifiedCallers() {
+    var f = fixtureWithStudents();
+    var a = principal(user("phase2-a@example.com"));
+    User unverified = new User();
+    unverified.setFullName("Test Unverified"); unverified.setEmail("phase2-unverified@example.com");
+    unverified.setPhone("+880100000001"); unverified.setAddress("Test address"); unverified.setStudentId("P2U");
+    unverified.setUniversityId(f.mu().getId()); unverified.setDepartmentId(f.muCse().getId());
+    unverified.setBatchId(f.muBatch().getId()); unverified.setState("REGISTERED");
+    unverified = users.save(unverified);
+    var u = principal(unverified);
+    posts.createPost(a, "POST", "DEPARTMENT", "Dept post", "Body text", List.of());
+    posts.createPost(a, "POST", "UNIVERSITY", "Uni post", "Body text", List.of());
+    posts.createPost(a, "POST", "NATIONAL", "National post", "Body text", List.of());
+    var seen = profiles.activity(a.userId(), u);
+    assertEquals(1, seen.size(), "unverified caller must see only the NATIONAL post");
+    assertEquals("National post", seen.get(0).title());
+    assertEquals(3, profiles.activity(a.userId(), a).size(), "verified caller in scope sees all three");
+  }
+
+  /** SHAPE: PostDto carries commentCount and sector tag names. */
+  @Test void postDtoCarriesCommentCountAndSectors() {
+    fixtureWithStudents();
+    var a = principal(user("phase2-a@example.com"));
+    SectorTag s = new SectorTag(); s.setName("Phase2 DTO Sector"); s.setActive(true); s = sectors.save(s);
+    var post = posts.createPost(a, "POST", "DEPARTMENT", "DTO post", "Body text", List.of(s.getId()));
+    assertEquals(0, post.commentCount());
+    assertEquals(List.of("Phase2 DTO Sector"), post.sectors());
+    posts.addComment(a, post.id(), "First!", List.of());
+    posts.addComment(a, post.id(), "Second!", List.of());
+    var reloaded = posts.getPost(post.id(), a);
+    assertEquals(2, reloaded.commentCount());
+    assertEquals(List.of("Phase2 DTO Sector"), reloaded.sectors());
+  }
+
+  /** SHAPE: CommentDto carries the author's display name; BookmarkDto carries
+   *  the bookmarked post's title for POST targets and null otherwise. */
+  @Test void commentDtoCarriesAuthorNameAndBookmarkDtoCarriesTitle() {
+    fixtureWithStudents();
+    var a = principal(user("phase2-a@example.com"));
+    var b = principal(user("phase2-b@example.com"));
+    var post = posts.createPost(a, "POST", "DEPARTMENT", "Titled post", "Body text", List.of());
+    var c = posts.addComment(b, post.id(), "Nice post", List.of());
+    assertEquals("Test P2B", c.authorName());
+    assertEquals("Test P2B", posts.listComments(post.id()).get(0).authorName());
+    posts.bookmark(b, "POST", post.id());
+    var marks = posts.listBookmarks(b.userId());
+    assertEquals(1, marks.size());
+    assertEquals("Titled post", marks.get(0).title());
+    posts.bookmark(b, "USER", a.userId());
+    assertEquals(2, posts.listBookmarks(b.userId()).size());
+    assertNull(posts.listBookmarks(b.userId()).stream()
+      .filter(m -> "USER".equals(m.targetType())).findFirst().orElseThrow().title());
+  }
+
   @Test void eventDetailUpcomingEditDelete() {
     fixtureWithStudents();
     var a = principal(user("phase2-a@example.com"));
@@ -196,7 +279,7 @@ class Phase2ServiceTest {
     profiles.deleteProject(a.userId(), pr.id());
     assertEquals(0, profiles.listProjects(a.userId()).size());
     posts.createPost(a, "POST", "DEPARTMENT", "Activity post", "Body text", List.of());
-    assertEquals(1, profiles.activity(a.userId()).size());
+    assertEquals(1, profiles.activity(a.userId(), a).size());
   }
 
   @Test void photoAndCoverUploadRoundTrip() {
@@ -210,6 +293,50 @@ class Phase2ServiceTest {
     assertArrayEquals(PNG, profiles.openCover(a.userId()).bytes());
     assertThrows(com.unilink.common.Exceptions.BadRequest.class,
       () -> profiles.uploadPhoto(a.userId(), "evil.txt", "text/plain", "hello".getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test void coverUploadAccepts3MbAndRejects6Mb() {
+    fixtureWithStudents();
+    var a = principal(user("phase2-a@example.com"));
+    byte[] threeMb = pngOfSize(3*1024*1024);
+    profiles.uploadCover(a.userId(), "cover.png", "image/png", threeMb);
+    assertArrayEquals(threeMb, profiles.openCover(a.userId()).bytes());
+    assertThrows(com.unilink.common.Exceptions.BadRequest.class,
+      () -> profiles.uploadCover(a.userId(), "big.png", "image/png", pngOfSize(6*1024*1024)));
+    // Photo limit is unchanged at 2 MB (D-029a).
+    assertThrows(com.unilink.common.Exceptions.BadRequest.class,
+      () -> profiles.uploadPhoto(a.userId(), "big.png", "image/png", threeMb));
+  }
+
+  private static byte[] pngOfSize(int n){
+    byte[] b = new byte[n];
+    System.arraycopy(PNG, 0, b, 0, PNG.length);
+    return b;
+  }
+
+  @Test void teamCreationEnforcesEventVisibilityAndArchive() {
+    var f = fixtureWithStudents();
+    factory.verifiedStudent("phase2-du@example.com", "P2DU", f.du(), f.duCse(), f.duBatch());
+    var a = principal(user("phase2-a@example.com")); // Metropolitan University
+    var b = principal(user("phase2-b@example.com")); // Metropolitan University
+    var du = principal(user("phase2-du@example.com")); // University of Dhaka
+    // Cross-university DEPARTMENT-scoped event: 404, existence not leaked.
+    var duDeptEvent = posts.createEvent(du, "DEPARTMENT", "DU seminar", "Body text",
+      LocalDateTime.now().plusDays(3), null, null, List.of());
+    assertThrows(com.unilink.common.Exceptions.NotFound.class,
+      () -> teams.createTeam(a, duDeptEvent.id(), "Squad", 4));
+    // NATIONAL event from another university is open to verified students.
+    var duNational = posts.createEvent(du, "NATIONAL", "Open hackathon", "Body text",
+      LocalDateTime.now().plusDays(3), null, null, List.of());
+    assertNotNull(teams.createTeam(a, duNational.id(), "Squad", 4).id());
+    // Archived event in the caller's own scope is rejected (400).
+    var own = posts.createEvent(a, "DEPARTMENT", "MU seminar", "Body text",
+      LocalDateTime.now().plusDays(3), null, null, List.of());
+    var ev = eventDetails.findById(own.id()).orElseThrow();
+    ev.setArchivedAt(LocalDateTime.now());
+    eventDetails.save(ev);
+    assertThrows(com.unilink.common.Exceptions.BadRequest.class,
+      () -> teams.createTeam(b, own.id(), "Late squad", 4));
   }
 
   @Test void communityContextPlacesStudentInRooms() {

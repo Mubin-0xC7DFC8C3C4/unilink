@@ -1,7 +1,7 @@
 package com.unilink.profile.api;
 import com.unilink.community.FeedService;
 import com.unilink.profile.ProfileDtos; import com.unilink.profile.ProfileService;
-import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.security.AccessPolicy;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
@@ -22,7 +22,9 @@ public class ProfileController {
     return service.updateOwn(p.userId(), r.bio(), r.headline(), r.links(), r.phoneVisible());
   }
   @GetMapping("/{id}") public ProfileService.ProfileDto get(Authentication a, @PathVariable Long id){
-    Principals.UnilinkUserPrincipal p = a==null?null:(Principals.UnilinkUserPrincipal) a.getPrincipal();
+    // F7: use requireStudent like every other student controller — an admin
+    // principal used to hit a raw cast (ClassCastException -> 500); now it is 403.
+    var p = policy.requireStudent(a.getPrincipal());
     return service.getProfile(id, p);
   }
   /** Profile photo / cover upload (FR-PROF-01): multipart `file`, image ≤2 MB. */
@@ -54,10 +56,10 @@ public class ProfileController {
   }
   /** Activity feed (FR-PROF-07). */
   @GetMapping("/me/activity") public List<FeedService.PostDto> myActivity(Authentication a){
-    var p = policy.requireStudent(a.getPrincipal()); return service.activity(p.userId());
+    var p = policy.requireStudent(a.getPrincipal()); return service.activity(p.userId(), p);
   }
   @GetMapping("/{id}/activity") public List<FeedService.PostDto> activity(Authentication a, @PathVariable Long id){
-    policy.requireStudent(a.getPrincipal()); return service.activity(id);
+    var p = policy.requireStudent(a.getPrincipal()); return service.activity(id, p);
   }
   @PostMapping("/me/projects") public ProfileDtos.ProjectDto addProject(Authentication a, @RequestBody TextPayload r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);

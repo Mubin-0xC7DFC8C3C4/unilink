@@ -1,10 +1,12 @@
 package com.unilink.storage;
-import com.unilink.common.Exceptions; import org.springframework.beans.factory.annotation.Value;
+import com.unilink.common.Exceptions; import org.slf4j.Logger; import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import java.io.*; import java.nio.file.*; import java.util.UUID;
 /** Private local-volume adapter (dev). Files live under a non-public directory; never served directly. */
 @Component
 public class LocalStorageAdapter implements StorageGateway {
+  private static final Logger log = LoggerFactory.getLogger(LocalStorageAdapter.class);
   private final Path root;
   public LocalStorageAdapter(@Value("${app.storage.local-path:./storage-dev}") String path){ this.root = Path.of(path); }
   @Override public String store(String namespace, String fileName, String contentType, byte[] bytes){
@@ -19,6 +21,10 @@ public class LocalStorageAdapter implements StorageGateway {
       return Files.newInputStream(p); } catch (Exceptions.AppException e){ throw e; } catch (IOException e){ throw new IllegalStateException(e); }
   }
   @Override public boolean exists(String key){ try { Path p=root.resolve(key); return p.normalize().startsWith(root.normalize()) && Files.exists(p); } catch (Exception e){ return false; } }
-  @Override public void delete(String key){ try { Files.deleteIfExists(root.resolve(key)); } catch (IOException ignored){} }
+  @Override public void delete(String key){
+    Path p = root.resolve(key);
+    if (!p.normalize().startsWith(root.normalize())) throw new Exceptions.BadRequest("INVALID_FILENAME","Invalid file name");
+    try { Files.deleteIfExists(p); } catch (IOException e){ log.warn("Failed to delete stored file {}", key, e); }
+  }
   @Override public long size(String key){ try { return Files.size(root.resolve(key)); } catch (IOException e){ return -1; } }
 }

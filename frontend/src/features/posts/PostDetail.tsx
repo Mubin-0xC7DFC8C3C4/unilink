@@ -2,13 +2,13 @@ import { useState } from 'react'; import { useParams, useNavigate } from 'react-
 import { apiGet, apiPost, apiDelete, api, errorMessage } from '../../api/client'; import { Button, EmptyState, ErrorState, PageHeader, Skeleton, ApiUnavailable } from '../../design/primitives';
 import type { Post, AttachmentItem } from '../../api/types';
 interface Comment { id: string|number; body: string; authorName?: string }
-export default function PostDetail(){ const {id}=useParams(); const nav=useNavigate(); const qc=useQueryClient(); const [comment,setComment]=useState(''); const [mention,setMention]=useState('');
+export default function PostDetail(){ const {id}=useParams(); const nav=useNavigate(); const qc=useQueryClient(); const [comment,setComment]=useState(''); const [mention,setMention]=useState(''); const [mentionedIds,setMentionedIds]=useState<number[]>([]);
   const post = useQuery({ queryKey:['post',id], queryFn: ()=>apiGet<Post>(`/posts/${id}`), retry:false });
   const me = useQuery({ queryKey:['me'], queryFn: ()=>apiGet<{id:number}>('/auth/me'), retry:false });
   const isOwner = me.data?.id!=null && post.data?.authorId!=null && Number(me.data.id)===Number(post.data.authorId);
   const comments = useQuery({ queryKey:['post-comments',id], queryFn: ()=>apiGet<Comment[]|{items:Comment[]}>(`/posts/${id}/comments`), retry:false });
   const attachments = useQuery({ queryKey:['post-attachments',id], queryFn: ()=>apiGet<AttachmentItem[]>(`/posts/${id}/attachments`), retry:false });
-  const addComment = useMutation({ mutationFn: ()=>apiPost(`/posts/${id}/comments`,{body:comment}), onSuccess: ()=>{ setComment(''); qc.invalidateQueries({queryKey:['post-comments',id]}); } });
+  const addComment = useMutation({ mutationFn: ()=>apiPost(`/posts/${id}/comments`,{body:comment, mentionUserIds: mentionedIds}), onSuccess: ()=>{ setComment(''); setMentionedIds([]); setMention(''); qc.invalidateQueries({queryKey:['post-comments',id]}); } });
   const react = useMutation({ mutationFn: (type:string)=>apiPost(`/reactions?reaction=${type}`,{targetType:'POST', targetId: Number(id)}) });
   const bookmark = useMutation({ mutationFn: ()=>apiPost('/bookmarks',{targetType:'POST', targetId: Number(id)}) });
   const unbookmark = useMutation({ mutationFn: ()=>api(`/bookmarks`,{method:'DELETE', body: JSON.stringify({targetType:'POST', targetId: Number(id)})}) });
@@ -23,7 +23,13 @@ export default function PostDetail(){ const {id}=useParams(); const nav=useNavig
   const upload = useMutation({ mutationFn: ()=>{ const fd=new FormData(); fd.append('file', file!); return apiPost(`/posts/${id}/attachments`, fd); }, onSuccess: ()=>{ setFile(null); qc.invalidateQueries({queryKey:['post-attachments',id]}); } });
   const citems = Array.isArray(comments.data)?comments.data:comments.data?.items??[];
   const mentionResults = useQuery({ queryKey:['mention-search',mention], queryFn: ()=>apiGet<{users?:{id:number;fullName?:string}[]}>(`/search?q=${encodeURIComponent(mention)}&type=users`), enabled: mention.length>=2, retry:false });
-  const suggestions = (mentionResults.data?.users ?? []).map(u=>u.fullName||'').filter(Boolean);
+  // Mention selection: the suggestion list is clickable — picking a user
+  // inserts @name into the comment and records the id, so addComment can
+  // send it as mentionUserIds (the backend accepts them on CommentBody).
+  // Typing @name without picking a suggestion records no id.
+  const mentionUsers = mentionResults.data?.users ?? [];
+  const pickMention=(u:{id:number;fullName?:string})=>{ const n=u.fullName||''; if(!n) return;
+    setComment(c=>c.replace(/@\w*$/, `@${n} `)); setMentionedIds(ids=>ids.includes(u.id)?ids:[...ids,u.id]); setMention(''); };
   const hidden = post.data?.status==='HIDDEN_AUTO' || post.data?.status==='HIDDEN_ADMIN';
   const err = react.error||bookmark.error||unbookmark.error||report.error||appeal.error||edit.error||del.error||upload.error;
   return <div className="container">{post.isPending?<Skeleton/>:post.isError?(post.error as any)?.status===404?<ApiUnavailable endpoint={`/posts/${id}`} onRetry={()=>post.refetch()}/>:<ErrorState message={errorMessage(post.error)} onRetry={()=>post.refetch()}/>:<><PageHeader eyebrow="Post" title={post.data?.title||'Post'} lead={post.data?.body||post.data?.content||''} />
@@ -43,8 +49,8 @@ export default function PostDetail(){ const {id}=useParams(); const nav=useNavig
   {comments.isPending?<Skeleton/>:comments.isError?<ErrorState message={errorMessage(comments.error)} onRetry={()=>comments.refetch()}/>:citems.length===0?<EmptyState title="No comments yet" body="Start the discussion."/>:<ul className="ruled-list">{citems.map(c=><li key={c.id}><strong>{c.authorName||'Student'}</strong><p>{c.body}</p></li>)}</ul>}
   <form onSubmit={e=>{e.preventDefault(); if(comment.trim()) addComment.mutate();}} style={{marginTop:16}}>
     <label htmlFor="comment">Add a comment</label>
-    <input id="comment" list="mentions" value={comment} onChange={e=>{setComment(e.target.value); const m=e.target.value.match(/@(\w*)$/); setMention(m?m[1]:'');}} className="input-search" style={{width:'100%'}} placeholder="Write a comment — type @ to mention someone" />
-    <datalist id="mentions">{mention.length>=2 && suggestions.map(s=><option key={s} value={`@${s}`} />)}</datalist>
+    <input id="comment" value={comment} onChange={e=>{setComment(e.target.value); const m=e.target.value.match(/@(\w*)$/); setMention(m?m[1]:'');}} className="input-search" style={{width:'100%'}} placeholder="Write a comment — type @ to mention someone" />
+    {mention.length>=2 && mentionUsers.length>0 && <ul className="ruled-list" aria-label="Mention suggestions">{mentionUsers.map(u=><li key={u.id}><button type="button" className="btn btn-sm" onClick={()=>pickMention(u)}>@{u.fullName||'Student'}</button></li>)}</ul>}
     {addComment.isError && <p role="alert" className="field-error">{errorMessage(addComment.error)}</p>}
     <div style={{marginTop:8}}><Button type="submit" variant="primary" disabled={!comment.trim()||addComment.isPending}>Comment</Button></div></form></section></div>;
 }

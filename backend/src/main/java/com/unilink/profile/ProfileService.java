@@ -157,14 +157,27 @@ public class ProfileService {
     achievements.delete(a);
   }
   // ---- activity feed (FR-PROF-07): the user's own public posts, newest first ----
+  // F1: the caller's visibility scope applies here too — an unverified caller
+  // sees NATIONAL posts only (D-016); a verified caller sees posts in their
+  // scope, reusing the same list-scope predicate as PostService.visibleEvents
+  // (same university, or DEPARTMENT_HUB in their catalog). The owner gets no
+  // exemption: this matches PostService.getPost, which applies D-016 to owners too.
   @Transactional(readOnly=true)
-  public List<FeedService.PostDto> activity(Long userId){
+  public List<FeedService.PostDto> activity(Long userId, Principals.UnilinkUserPrincipal viewer){
     users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
     return posts.findByAuthorIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 20)).stream()
-      .filter(p -> "ACTIVE".equals(p.getStatus())).map(feed::toDto).toList();
+      .filter(p -> "ACTIVE".equals(p.getStatus()))
+      .filter(p -> visibleTo(p, viewer)).map(feed::toDto).toList();
   }
-  // ---- profile photo / cover upload (FR-PROF-01): image ≤2 MB; the previous
-  //  stored object is deleted so stale files do not accumulate. ----
+  private boolean visibleTo(Post post, Principals.UnilinkUserPrincipal viewer){
+    if (viewer==null || !"VERIFIED".equals(viewer.state())) return "NATIONAL".equals(post.getVisibility());
+    return "NATIONAL".equals(post.getVisibility())
+      || (post.getScopeUniversityId()!=null && post.getScopeUniversityId().equals(viewer.universityId()))
+      || ("DEPARTMENT_HUB".equals(post.getVisibility())
+          && post.getScopeCatalogId()!=null && post.getScopeCatalogId().equals(viewer.catalogId()));
+  }
+  // ---- profile photo / cover upload (FR-PROF-01): photo ≤2 MB, cover ≤5 MB
+  //  (D-029a); the previous stored object is deleted so stale files do not accumulate. ----
   @Transactional
   public void uploadPhoto(Long userId, String fileName, String contentType, byte[] bytes){
     if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
@@ -179,7 +192,7 @@ public class ProfileService {
   public void uploadCover(Long userId, String fileName, String contentType, byte[] bytes){
     if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
     String sniffed = uploads.sniffContentType(bytes, contentType);
-    uploads.validateImage(bytes, UploadValidator.PHOTO_MAX, contentType);
+    uploads.validateImage(bytes, UploadValidator.COVER_MAX, contentType);
     Profile p = profiles.findById(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
     String key = storage.store("profile-covers", fileName, sniffed, bytes);
     if (p.getCoverKey()!=null) storage.delete(p.getCoverKey());

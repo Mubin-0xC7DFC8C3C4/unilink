@@ -26,6 +26,13 @@ spring:
       initialize-schema: never
       table-name: SPRING_SESSION
     timeout: 2h
+  servlet:
+    multipart:
+      # D-029a caps (profile photo 2 MB, cover/ID/poster 5 MB, attachment 10 MB)
+      # must be reachable: without this Spring Boot's 1 MB/file default rejects
+      # larger uploads before the service validator runs.
+      max-file-size: 10MB
+      max-request-size: 11MB
   mail:
     host: ${SMTP_HOST:localhost}
     port: ${SMTP_PORT:1025}

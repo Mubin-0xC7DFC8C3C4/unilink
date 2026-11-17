@@ -20,6 +20,17 @@ export default function MasterData(){ const [tab,setTab]=useState<string>('unive
   const [catalogId,setCatalogId]=useState(''); const [deptId,setDeptId]=useState(''); const [label,setLabel]=useState(''); const [startYear,setStartYear]=useState('');
   const [editing,setEditing]=useState<{id:string|number;name:string}|null>(null);
   const refresh=()=>qc.invalidateQueries({queryKey:['admin-master',tab]});
+  // Add stays disabled until the current tab's required fields are chosen
+  // (same pattern as the Moderators create button): otherwise a click can
+  // POST a department with catalogId 0 (Number('') === 0) or a batch with
+  // no department. startYear is optional server-side, so it is not required.
+  const canAdd = tab==='universities' ? !!name.trim()
+    : tab==='departments' ? !!effUni && !!catalogId && !!name.trim()
+    : tab==='batches' ? !!effUni && !!deptId && !!label.trim()
+    : tab==='sectors' ? !!name.trim() : false;
+  // Departments/batches need a university id: do not fetch the list until
+  // one is known (effUni is '' until the universities load).
+  const listEnabled = (tab==='departments'||tab==='batches') ? effUni!=='' : true;
   const create=useMutation({ mutationFn: ()=>{
     if(tab==='universities') return apiPost('/admin/master-data/universities',{name, shortName, emailDomains: domains});
     if(tab==='departments') return apiPost('/admin/master-data/departments',{universityId: Number(effUni), catalogId: Number(catalogId), name});
@@ -31,7 +42,7 @@ export default function MasterData(){ const [tab,setTab]=useState<string>('unive
   const err = create.error||deactivate.error||rename.error;
   return <div><div role="tablist" aria-label="Master data" style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{TABS.map(([k,label])=><button key={k} role="tab" aria-selected={tab===k} className={tab===k?'btn btn-primary btn-sm':'btn btn-sm'} onClick={()=>{setTab(k); setEditing(null);}}>{label}</button>)}</div>
   {(tab==='departments'||tab==='batches') && <div style={{marginBottom:8}}><label htmlFor="md-uni">University </label><select id="md-uni" value={effUni} onChange={e=>setUniId(e.target.value)} className="input-search">{(unis.data||[]).map((u:any)=><option key={u.id} value={u.id}>{u.name}</option>)}</select></div>}
-  <AdminList<any> eyebrow="Admin Portal" title="Master data" lead="Universities (with email domains), department catalog, departments, batches and sector tags. Referenced rows are deactivated, never hard-deleted." queryKey={['admin-master',tab]} path={path} emptyTitle="No rows" emptyBody="No rows in this table yet." render={items=><table className="table"><thead><tr><th>Name</th><th>Detail</th><th>Active</th><th>Actions</th></tr></thead><tbody>{items.map((r:any)=><tr key={r.id}><td>{r.name||r.label||r.id}</td><td>{r.emailDomains||r.shortName||r.code||''}</td><td>{r.active===false?'No':'Yes'}</td><td>{tab!=='department-catalog' && <><Button onClick={()=>setEditing({id:r.id,name:r.name||r.label||''})}>Rename</Button>{' '}<Button onClick={()=>deactivate.mutate(r.id)} disabled={r.active===false}>Deactivate</Button></>}</td></tr>)}</tbody></table>} />
+  <AdminList<any> eyebrow="Admin Portal" title="Master data" lead="Universities (with email domains), department catalog, departments, batches and sector tags. Referenced rows are deactivated, never hard-deleted." queryKey={['admin-master',tab]} path={path} enabled={listEnabled} emptyTitle="No rows" emptyBody="No rows in this table yet." render={items=><table className="table"><thead><tr><th>Name</th><th>Detail</th><th>Active</th><th>Actions</th></tr></thead><tbody>{items.map((r:any)=><tr key={r.id}><td>{r.name||r.label||r.id}</td><td>{r.emailDomains||r.shortName||r.code||''}</td><td>{r.active===false?'No':'Yes'}</td><td>{tab!=='department-catalog' && <><Button onClick={()=>setEditing({id:r.id,name:r.name||r.label||''})}>Rename</Button>{' '}<Button onClick={()=>deactivate.mutate(r.id)} disabled={r.active===false}>Deactivate</Button></>}</td></tr>)}</tbody></table>} />
   {err && <p role="alert" className="field-error">{errorMessage(err)}</p>}
   {editing && <section className="card-group" style={{marginTop:16}}><h2 className="title">Rename row</h2><div style={{display:'flex',gap:8}}><input aria-label="New name" className="input-search" value={editing.name} onChange={e=>setEditing({...editing,name:e.target.value})} style={{flex:1}} /><Button variant="primary" onClick={()=>rename.mutate()} disabled={!editing.name.trim()}>Save</Button><Button onClick={()=>setEditing(null)}>Cancel</Button></div></section>}
   {tab!=='department-catalog' && <section className="card-group" style={{marginTop:16}}><h2 className="title">Add {tab==='batches'?'batch':tab.slice(0,-1)}</h2>
@@ -39,5 +50,5 @@ export default function MasterData(){ const [tab,setTab]=useState<string>('unive
   {tab==='universities' && <><label htmlFor="md-short">Short name</label><input id="md-short" className="input-search" value={shortName} onChange={e=>setShortName(e.target.value)} style={{width:'100%',marginBottom:8}} /><label htmlFor="md-dom">Email domains</label><input id="md-dom" className="input-search" value={domains} onChange={e=>setDomains(e.target.value)} placeholder="e.g. mu.ac.bd" style={{width:'100%',marginBottom:8}} /></>}
   {tab==='departments' && <><label htmlFor="md-cat">Department catalog</label><select id="md-cat" value={catalogId} onChange={e=>setCatalogId(e.target.value)} className="input-search" style={{marginBottom:8}}><option value="">Select…</option>{(catalog.data||[]).map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></>}
   {tab==='batches' && <><label htmlFor="md-dept">Department</label><select id="md-dept" value={deptId} onChange={e=>setDeptId(e.target.value)} className="input-search" style={{marginBottom:8}}><option value="">Select…</option>{(depts.data||[]).map((d:any)=><option key={d.id} value={d.id}>{d.name}</option>)}</select><label htmlFor="md-label">Label</label><input id="md-label" className="input-search" value={label} onChange={e=>setLabel(e.target.value)} style={{width:'100%',marginBottom:8}} /><label htmlFor="md-year">Start year</label><input id="md-year" type="number" className="input-search" value={startYear} onChange={e=>setStartYear(e.target.value)} style={{marginBottom:8}} /></>}
-  <Button variant="primary" onClick={()=>create.mutate()} disabled={create.isPending}>Add</Button></section>}</div>;
+  <Button variant="primary" onClick={()=>create.mutate()} disabled={!canAdd||create.isPending}>Add</Button></section>}</div>;
 }

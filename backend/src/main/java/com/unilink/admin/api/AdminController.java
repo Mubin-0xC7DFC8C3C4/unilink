@@ -47,7 +47,7 @@ public class AdminController {
   }
   @GetMapping("/users") public List<AdminUserDto> users(Authentication a, @RequestParam(required=false) String q){ return admin.listUsers(admin(a), q); }
   @GetMapping("/users/{id}") public AdminUserDto user(Authentication a, @PathVariable Long id){ return admin.getUser(admin(a), id); }
-  @PostMapping("/users/{id}/{action}") public AdminUserDto userAction(Authentication a, @PathVariable Long id, @PathVariable String action, @RequestBody ReasonBody b, HttpServletRequest req){
+  @PostMapping("/users/{id}/{action}") public AdminService.UserActionResult userAction(Authentication a, @PathVariable Long id, @PathVariable String action, @RequestBody ReasonBody b, HttpServletRequest req){
     return admin.changeUserState(admin(a), id, action.toUpperCase(Locale.ROOT), b.reason(), ip(req));
   }
   @PostMapping("/users/{id}/recommend-suspension") public SuspensionRecommendationDto recommend(Authentication a, @PathVariable Long id, @RequestBody ReasonBody b, HttpServletRequest req){
@@ -65,7 +65,7 @@ public class AdminController {
     return Map.of("status","ok");
   }
   @GetMapping("/appeals") public List<AppealDto> appeals(Authentication a){
-    admin(a); return admin.pendingAppeals();
+    return admin.pendingAppeals(admin(a));
   }
   @PostMapping("/appeals/{id}/decide") public AppealDto decideAppeal(Authentication a, @PathVariable Long id, @RequestBody DecideBody b, HttpServletRequest req){
     return admin.decideAppeal(admin(a), id, "ACCEPT".equalsIgnoreCase(b.action()), b.reason(), ip(req));
@@ -156,9 +156,13 @@ public class AdminController {
       .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"audit-log.csv\"")
       .body(csv.toString());
   }
+  /** CSV cell: strip CR (row-break injection) and defuse formula injection —
+   *  a cell starting with =, +, - or @ is prefixed with a single quote so a
+   *  spreadsheet does not execute it as a formula. */
   private static String csvCell(String v){
     if (v==null) return "";
-    String s = v.replace("\"","\"\"");
+    String s = v.replace("\r","").replace("\"","\"\"");
+    if (!s.isEmpty() && "=+-@".indexOf(s.charAt(0))>=0) s = "'"+s;
     return (s.contains(",") || s.contains("\"") || s.contains("\n")) ? "\""+s+"\"" : s;
   }
   @GetMapping("/alerts") public List<AdminAlertDto> alerts(Authentication a){

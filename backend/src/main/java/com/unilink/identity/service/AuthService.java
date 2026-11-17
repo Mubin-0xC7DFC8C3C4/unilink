@@ -72,6 +72,9 @@ public class AuthService {
     req.setIdCardKey(idKey); req.setProfilePhotoKey(photoKey);
     req = requests.save(req);
     otp.sendPhoneOtp(u);
+    // Seed the resend cooldown from the registration send, so the 60 s
+    // cooldown (D-081) applies from the first send, not just from a resend.
+    throttle.tryAcquire("otp-resend:"+u.getId(), 5, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW);
     otp.sendEmailVerificationLink(u, props.baseUrl());
     ocrJob.runOcr(req.getId(), idKey, u.getFullName(), u.getStudentId());
     return toDto(u);
@@ -89,13 +92,17 @@ public class AuthService {
   }
   /** OTP resend caps (FR-AUTH-04 / NFR-SEC-05): 60 s cooldown per user,
    *  at most 5 resends per hour per user, at most 10 per hour per IP.
-   *  Reuses the LoginThrottle bucket pattern; no new table. */
+   *  Reuses the LoginThrottle bucket pattern; no new table.
+   *  Anti-enumeration: unknown users and already-verified phones get the
+   *  same generic 200 as a real resend, and no OTP is sent and no
+   *  rate-limit quota is consumed for them — the response leaks neither
+   *  existence nor verification state. */
   private static final Duration OTP_RESEND_COOLDOWN = Duration.ofMinutes(1);
   private static final Duration OTP_RESEND_WINDOW = Duration.ofHours(1);
   @Transactional
   public Map<String,String> resendPhoneOtp(Long userId, String ip){
-    User u = getUserOr404(userId);
-    if (u.getPhoneVerifiedAt()!=null) throw new Exceptions.BadRequest("PHONE_ALREADY_VERIFIED","Phone number is already verified");
+    User u = users.findById(userId).orElse(null);
+    if (u==null || u.getPhoneVerifiedAt()!=null) return Map.of("status","OTP resent");
     String userKey = "otp-resend:"+userId; String ipKey = "otp-resend-ip:"+ip;
     if (throttle.isLocked(userKey) || throttle.isLocked(ipKey))
       throw new Exceptions.TooManyRequests("Too many OTP requests. Try again later.");
@@ -104,7 +111,10 @@ public class AuthService {
     if (!throttle.tryAcquire(userKey, 5, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW)
         || !throttle.tryAcquire(ipKey, 10, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW))
       throw new Exceptions.TooManyRequests("Too many OTP requests. Try again later.");
-    return Map.of("status","OTP resent","channel", otp.sendPhoneOtp(u));
+    otp.sendPhoneOtp(u);
+    // Deliberately the same shape as the generic response above (no channel):
+    // a differing body would re-introduce the existence oracle.
+    return Map.of("status","OTP resent");
   }
   @Transactional
   public UserDto verifyEmail(String token, Long userId){

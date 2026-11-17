@@ -48,26 +48,51 @@ class OtpResendTest {
     mvc.perform(post("/api/auth/otp/resend").contentType(MediaType.APPLICATION_JSON)
         .content("{\"userId\":" + u.getId() + "}"))
       .andExpect(status().isOk())
-      .andExpect(jsonPath("$.status").value("OTP resent"))
-      .andExpect(jsonPath("$.channel").value("SMS"));
+      .andExpect(jsonPath("$.status").value("OTP resent"));
     assertTrue(TestProviders.SMS_OTPS.containsKey(u.getPhone()), "OTP must be sent to the user's phone");
     mvc.perform(post("/api/auth/otp/resend").contentType(MediaType.APPLICATION_JSON)
         .content("{\"userId\":" + u.getId() + "}"))
       .andExpect(status().isTooManyRequests());
   }
-  @Test void resendUnknownUserIs404() throws Exception {
+  /** Fix 7: unknown user / already-verified phone get the same generic 200
+   *  as a real resend, and no OTP is sent — the endpoint leaks neither
+   *  existence nor verification state. */
+  @Test void resendUnknownUserReturnsGeneric200WithoutSending() throws Exception {
     mvc.perform(post("/api/auth/otp/resend").contentType(MediaType.APPLICATION_JSON)
         .content("{\"userId\":999999}"))
-      .andExpect(status().isNotFound());
+      .andExpect(status().isOk())
+      .andExpect(jsonPath("$.status").value("OTP resent"));
+    assertTrue(TestProviders.SMS_OTPS.isEmpty(), "no OTP may be sent for an unknown user");
   }
-  @Test void resendAlreadyVerifiedPhoneIs400() throws Exception {
+  @Test void resendAlreadyVerifiedPhoneReturnsGeneric200WithoutSending() throws Exception {
     var f = factory.seedMaster();
     User v = factory.verifiedStudent("otp-verified-" + System.nanoTime() + "@example.com",
       "OTP-V-" + System.nanoTime(), f.mu(), f.muCse(), f.muBatch());
     mvc.perform(post("/api/auth/otp/resend").contentType(MediaType.APPLICATION_JSON)
         .content("{\"userId\":" + v.getId() + "}"))
-      .andExpect(status().isBadRequest())
-      .andExpect(jsonPath("$.code").value("PHONE_ALREADY_VERIFIED"));
+      .andExpect(status().isOk())
+      .andExpect(jsonPath("$.status").value("OTP resent"));
+    assertTrue(TestProviders.SMS_OTPS.isEmpty(), "no OTP may be sent for an already-verified phone");
+  }
+  /** Fix 8: registration seeds the resend cooldown, so an immediate resend
+   *  after sign-up is rejected with 429. */
+  @Test void registerSeedsResendCooldown() throws Exception {
+    var f = factory.seedMaster();
+    String email = "otp-reg-" + System.nanoTime() + "@example.com";
+    // Real PNG magic bytes: UploadValidator sniffs content, junk bytes are rejected.
+    byte[] png = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 1, 2, 3, 4};
+    MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", png);
+    MockMultipartFile photo = new MockMultipartFile("profilePhoto", "photo.jpg", "image/jpeg", png);
+    String body = mvc.perform(multipart("/api/auth/register").file(idCard).file(photo)
+        .param("fullName", "Test User").param("phone", "01712345678").param("email", email)
+        .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
+        .param("address", "123 Test Road").param("studentId", "CSE-" + System.nanoTime()).param("password", "Password1"))
+      .andExpect(status().isCreated())
+      .andReturn().getResponse().getContentAsString();
+    long userId = Long.parseLong(body.replaceAll(".*\"id\"\\s*:\\s*(\\d+).*", "$1"));
+    mvc.perform(post("/api/auth/otp/resend").contentType(MediaType.APPLICATION_JSON)
+        .content("{\"userId\":" + userId + "}"))
+      .andExpect(status().isTooManyRequests());
   }
   @Test void registerRejectsBadPhoneWith422() throws Exception {
     var f = factory.seedMaster();

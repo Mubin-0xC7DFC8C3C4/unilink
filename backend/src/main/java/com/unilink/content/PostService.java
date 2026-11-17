@@ -61,10 +61,14 @@ public class PostService {
     if (mentionUserIds!=null) for (Long m : mentionUserIds){ // D-025: mentions reference user id
       if (users.existsById(m)){ CommentMention cm=new CommentMention(); cm.setCommentId(c.getId()); cm.setMentionedUserId(m); mentions.save(cm); }
     }
-    return ContentDtos.CommentDto.from(c);
+    return ContentDtos.CommentDto.from(c, authorName(c.getAuthorId()));
+  }
+  /** SHAPE: comment author's display name; null when the user is unknown — never fabricated. */
+  private String authorName(Long authorId){
+    return authorId==null ? null : users.findById(authorId).map(User::getFullName).orElse(null);
   }
   @Transactional(readOnly=true)
-  public List<ContentDtos.CommentDto> listComments(Long postId){ return comments.findByPostIdOrderByCreatedAtAsc(postId).stream().map(ContentDtos.CommentDto::from).toList(); }
+  public List<ContentDtos.CommentDto> listComments(Long postId){ return comments.findByPostIdOrderByCreatedAtAsc(postId).stream().map(c -> ContentDtos.CommentDto.from(c, authorName(c.getAuthorId()))).toList(); }
   @Transactional
   public void react(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reaction){
     policy.requireVerified(p);
@@ -88,7 +92,10 @@ public class PostService {
     bookmarks.deleteByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId);
   }
   @Transactional(readOnly=true)
-  public List<ContentDtos.BookmarkDto> listBookmarks(Long userId){ return bookmarks.findByUserIdOrderByCreatedAtDesc(userId).stream().map(ContentDtos.BookmarkDto::from).toList(); }
+  public List<ContentDtos.BookmarkDto> listBookmarks(Long userId){ return bookmarks.findByUserIdOrderByCreatedAtDesc(userId).stream()
+    // SHAPE: title is the bookmarked post's title when targetType is POST, null otherwise.
+    .map(b -> ContentDtos.BookmarkDto.from(b, "POST".equals(b.getTargetType())
+      ? posts.findById(b.getTargetId()).map(Post::getTitle).orElse(null) : null)).toList(); }
   // ---- events (D-023, D-024) ----
   @Transactional
   public FeedService.PostDto createEvent(Principals.UnilinkUserPrincipal p, String visibility, String title, String body,
@@ -157,7 +164,11 @@ public class PostService {
     return (r,q,cb) -> {
       var sq = q.subquery(Long.class);
       var e = sq.from(EventDetail.class);
-      sq.select(e.get("id")).where(past
+      // B1: correlate the subquery to the outer post. EventDetail shares the
+      // post PK, so the old `id IN (subquery)` happened to agree — but only via
+      // that implicit invariant; the correlation makes the list decided by
+      // THIS post's own detail, not by any matching event.
+      sq.select(e.get("id")).where(cb.equal(e.get("id"), r.get("id")), past
         ? cb.or(cb.lessThanOrEqualTo(e.get("deadline"), LocalDateTime.now()), cb.isNotNull(e.get("archivedAt")))
         : cb.and(cb.greaterThan(e.get("deadline"), LocalDateTime.now()), cb.isNull(e.get("archivedAt"))));
       return r.get("id").in(sq);

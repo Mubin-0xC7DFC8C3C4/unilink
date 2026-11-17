@@ -8,10 +8,13 @@ import java.time.LocalDateTime; import java.util.*;
 public class FeedService {
   public record PostDto(Long id, Long authorId, String authorName, String type, String visibility, String title,
                         String body, String status, LocalDateTime createdAt, LocalDateTime eventDeadline, String regLink,
-                        String location) {}
+                        String location, long commentCount, List<String> sectors) {}
   private final PostRepository posts; private final UserRepository users; private final EventDetailRepository events;
-  public FeedService(PostRepository posts, UserRepository users, EventDetailRepository events){
-    this.posts=posts; this.users=users; this.events=events; }
+  private final CommentRepository comments; private final PostSectorTagRepository postSectors; private final SectorTagRepository sectors;
+  public FeedService(PostRepository posts, UserRepository users, EventDetailRepository events,
+                     CommentRepository comments, PostSectorTagRepository postSectors, SectorTagRepository sectors){
+    this.posts=posts; this.users=users; this.events=events;
+    this.comments=comments; this.postSectors=postSectors; this.sectors=sectors; }
   @Transactional(readOnly=true)
   public PageResponse<PostDto> feed(Principals.UnilinkUserPrincipal p, String level, String cursor, int limit, Long sectorId){
     limit = Math.min(Math.max(limit,1),50);
@@ -37,8 +40,14 @@ public class FeedService {
   public PostDto toDto(Post post){
     String name = users.findById(post.getAuthorId()).map(User::getFullName).orElse("Deleted user");
     EventDetail ev = "EVENT".equals(post.getType()) ? events.findById(post.getId()).orElse(null) : null;
+    // SHAPE: commentCount counts the post's comments (same set listComments returns);
+    // sectors are the post's sector tag names, dangling tags dropped, never fabricated.
+    long commentCount = comments.findByPostIdOrderByCreatedAtAsc(post.getId()).size();
+    List<String> sectorNames = postSectors.findByPostId(post.getId()).stream()
+      .flatMap(t -> sectors.findById(t.getSectorTagId()).map(SectorTag::getName).stream()).toList();
     return new PostDto(post.getId(), post.getAuthorId(), name, post.getType(), post.getVisibility(),
       post.getTitle(), post.getBody(), post.getStatus(), post.getCreatedAt(),
-      ev==null?null:ev.getDeadline(), ev==null?null:ev.getRegLink(), ev==null?null:ev.getLocation());
+      ev==null?null:ev.getDeadline(), ev==null?null:ev.getRegLink(), ev==null?null:ev.getLocation(),
+      commentCount, sectorNames);
   }
 }

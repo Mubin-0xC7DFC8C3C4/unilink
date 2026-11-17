@@ -1,11 +1,14 @@
-import { useState } from 'react'; import { useMutation } from '@tanstack/react-query'; import { apiPost, apiPut, api, errorMessage } from '../../api/client';
-import { Button, Field, Input, PageHeader, Modal } from '../../design/primitives'; import { useTheme } from '../../app/ThemeContext';
-export default function SettingsPage(){ const { theme, toggle }=useTheme(); const [bio,setBio]=useState(''); const [phoneVisible,setPhoneVisible]=useState(false); const [showDelete,setShowDelete]=useState(false); const [pw,setPw]=useState(''); const [msg,setMsg]=useState('');
+import { useState } from 'react'; import { useNavigate } from 'react-router-dom'; import { useMutation } from '@tanstack/react-query'; import { apiPost, apiPut, api, errorMessage } from '../../api/client';
+import { Button, Field, Input, PageHeader, Modal } from '../../design/primitives'; import { useTheme } from '../../app/ThemeContext'; import { useAuth } from '../../app/auth';
+export default function SettingsPage(){ const { theme, toggle }=useTheme(); const { setUser }=useAuth(); const nav=useNavigate(); const [bio,setBio]=useState(''); const [phoneVisible,setPhoneVisible]=useState(false); const [showDelete,setShowDelete]=useState(false); const [pw,setPw]=useState(''); const [msg,setMsg]=useState('');
   const saveProfile = useMutation({ mutationFn: ()=>apiPut('/profiles/me',{bio}), onSuccess: ()=>setMsg('Profile saved.') });
   const savePrivacy = useMutation({ mutationFn: ()=>apiPut('/profiles/me',{phoneVisible}), onSuccess: ()=>setMsg('Privacy saved.') });
   // Deletion is synchronous server-side (one transaction, D-052): on
-  // success the account is already gone, not "being processed".
-  const del = useMutation({ mutationFn: ()=>apiPost('/me/delete',{password:pw}), onSuccess: ()=>setMsg('Account deleted. You have been signed out.') });
+  // success the account is already gone, not "being processed". The server
+  // also invalidates the session, so clear the client auth state (same
+  // setUser(null) + nav('/login') as the Layout logout) — otherwise the
+  // client still looks signed in to a deleted account.
+  const del = useMutation({ mutationFn: ()=>apiPost('/me/delete',{password:pw}), onSuccess: ()=>{ setUser(null); nav('/login'); } });
   const [photo,setPhoto]=useState<File|null>(null); const [cover,setCover]=useState<File|null>(null);
   const uploadPhoto = useMutation({ mutationFn: ()=>{ const fd=new FormData(); fd.append('file', photo!); return api('/profiles/me/photo',{method:'PUT', body: fd}); }, onSuccess: ()=>{ setPhoto(null); setMsg('Profile photo uploaded.'); } });
   const uploadCover = useMutation({ mutationFn: ()=>{ const fd=new FormData(); fd.append('file', cover!); return api('/profiles/me/cover',{method:'PUT', body: fd}); }, onSuccess: ()=>{ setCover(null); setMsg('Cover photo uploaded.'); } });

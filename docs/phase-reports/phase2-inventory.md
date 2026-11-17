@@ -1,5 +1,114 @@
 # Phase 2 inventory: frontend ↔ backend API contract diff
 
+## Addendum 2 — verification round (2026-11-17, uncommitted fixes on top of `080e763`)
+
+The 5 SHAPE items listed below are fixed by the verification round: PostDto
+now carries `commentCount` + `sectors`, CommentDto carries `authorName`,
+BookmarkDto carries `title` (all server-side, additive), and Dashboard /
+Analytics read the real backend field names (`totalUsers`,
+`reportsAwaitingReview`, `newUsersToday`, `verificationTurnaroundHours`,
+`usersPerDay30`; `eventCount` is derived as the sum of `eventsPerSector`).
+Final counts, same counting rule (distinct method + path-template pairs):
+
+| | Final |
+|---|---|
+| Frontend operations | 129 (127 REST + 2 STOMP) |
+| MATCH | **129** |
+| SHAPE | **0** |
+| MISMATCH | **0** |
+| Backend routes | 158 (157 REST + 1 STOMP) |
+| Backend routes with no frontend caller (orphans) | 30 (unchanged; mostly legitimate admin/secondary endpoints, listed in §B) |
+
+No frontend call targets a nonexistent endpoint. One follow-up is still open:
+`Users.tsx` now displays the FORCE_RESET temporary password once; the
+`memberIds[0]` = room-creator heuristic in `MessagesPage.tsx` (Remove
+button gating) should switch to a backend `creatorId` if one is ever sent.
+
+## Addendum — recomputed at HEAD `080e763` (2026-11-17, static audit only)
+
+The counts below in §0–§3 are the **pre-commit freeze snapshot** (working
+tree at `1f59a50`-era, before the Phase 2 commit landed). Recomputed from
+scratch at HEAD `080e763`:
+
+| | Recomputed at `080e763` | Inventory §0 (freeze snapshot) |
+|---|---|---|
+| Frontend operations | **129** (127 REST + 2 STOMP) | 76 |
+| MATCH | **124** | 36 |
+| SHAPE | **5** | 17 |
+| MISMATCH | **0** | 23 |
+| Backend routes | **158** (157 REST + 1 STOMP) | 124 |
+| Backend routes with no frontend caller (orphans) | **30** | 73 |
+
+**Why the numbers differ.** (1) The Phase 2 commit landed after the
+freeze: it fixed the remaining mismatches/shapes on the frontend, added
+~34 backend routes §2.1 never listed (admin announcements GET/PUT/DELETE,
+admin events GET/PATCH, audit CSV export, moderators GET/PUT/reset-credentials,
+master-data PUTs ×4 + deactivate, GET `/api/teams`, photo/cover PUT + GET,
+activity GETs, portfolio GETs/PUTs/DELETEs, sector-unfollow DELETE), and
+added ~50 new frontend calls (session restore, CSRF priming, follow/unfollow
+sector, reactions/bookmarks DELETE, reports/appeals, post/event PATCH/DELETE
++ attachments, team-request/respond, teams list/requests/decide, calendar,
+portfolio CRUD, activity, temp rooms + invite/remove/close, notification
+prefs/read, photo/cover upload, moderators/master-data/announcements/admin-events
+writes, audit export). (2) Counting rule: distinct (method, path-template)
+pairs. Two `PUT /profiles/me` call sites (`SettingsPage.tsx:4,5`) count as
+one op; one parameterised call site expands to all pairs it reaches
+(portfolio save `ProfilePage.tsx:20` → 3 POST + 3 PUT; master-data create /
+rename / deactivate `MasterData.tsx:24-30` → 4 POST + 4 PUT + 4 POST);
+`GET /search` counts once though called from `PostDetail.tsx:25` and
+`SearchPage.tsx:11`. Client conventions unchanged: `client.ts:39` prefixes
+every path with `/api`, so paths below are compared after that prefix.
+
+**Remaining SHAPE issues (5) — no MISMATCH remains; every frontend call
+targets an existing backend route.**
+
+1. `GET /feed` — `frontend/src/features/feed/Feed.tsx:17`. `PostDto`
+   (`FeedService.java:9-11`) has no `sector`, `commentCount`, `content` or
+   `level`; the page reads all four (guarded fallbacks, renders blank).
+   The sector *param* is fixed (numeric id).
+2. `GET /posts/{id}/comments` — `frontend/src/features/posts/PostDetail.tsx:9`.
+   `CommentDto` (`ContentDtos.java:7`) has no `authorName`; the page renders
+   `'Student'` for every comment.
+3. `GET /bookmarks` — `frontend/src/features/posts/SavedPage.tsx:2`.
+   `BookmarkDto` (`ContentDtos.java:10`) has no `title`; the page renders
+   `"Saved item {targetId}"` for every row.
+4. `GET /admin/dashboard` — `frontend/src/admin/pages/Dashboard.tsx:3`.
+   The page reads `userCount|users`, `pendingReports`, `newUsersPerDay`;
+   the backend (`AdminService.java:43-53`) sends `totalUsers`,
+   `reportsAwaitingReview`, `newUsersToday`. Only `pendingVerifications`
+   and `activeEvents` agree — three stats render "—".
+5. `GET /admin/analytics` — `frontend/src/admin/pages/Analytics.tsx:2`.
+   The page reads `verificationTurnaroundDays`, `eventCount`, `userGrowth`;
+   the backend (`AdminService.java:281-291`) sends
+   `verificationTurnaroundHours`, `usersPerDay30`, and no `eventCount`.
+   Only `activeUniversities` and `eventsPerSector` agree.
+
+**Orphans (30, recomputed):** `DELETE /api/blocks/{userId}`,
+`DELETE /api/profiles/me/skills/{skillId}`, `DELETE /api/reactions`,
+`GET /api/admin/alerts`, `GET /api/admin/suspension-recommendations`,
+`GET /api/admin/users/{id}`, `GET /api/announcements`, `GET /api/health`,
+`GET /api/notifications/unread-count`, `GET /api/profiles/me/achievements`,
+`GET /api/profiles/me/education`, `GET /api/profiles/me/projects`,
+`GET /api/profiles/{id}/cover`, `GET /api/profiles/{id}/photo`,
+`GET /api/public/skills`,
+`GET /api/rooms/{publicId}/messages/{messageId}/attachments`,
+`GET /api/rooms/{publicId}/messages/{messageId}/attachments/{attachmentId}`,
+`GET /api/teams/event/{eventPostId}`,
+`POST /api/admin/auth/email-otp/request`,
+`POST /api/admin/auth/email-otp/verify`,
+`POST /api/admin/suspension-recommendations/{id}/decide`,
+`POST /api/admin/users/{id}/recommend-suspension`,
+`POST /api/appeals/public`, `POST /api/auth/change-password`,
+`POST /api/blocks/{userId}`, `POST /api/profiles/me/identity-change`,
+`POST /api/profiles/me/skills`, `POST /api/rooms/private/{userId}`,
+`POST /api/rooms/{publicId}/mute`, `POST /api/teams`.
+**Migration V009 verdict (same audit):** additive only — one nullable
+`closed_at DATETIME(3)` column on `chat_rooms`; matches the `ChatRoom`
+entity's `LocalDateTime closedAt` (`identity/domain/ChatRoom.java:14`); the
+Phase 2 diff touches no migration V001–V008; no Phase 2 backend change
+assumes a schema element without a migration. No live MySQL verification
+was performed (static audit only).
+
 - **HEAD:** `1f59a50` (verified `git rev-parse HEAD`).
 - **Date:** 2026-11-17. **Author:** Phase 2 inventory worker (subagent).
 - **⚠️ SNAPSHOT WARNING — the tree moved during this inventory.** A

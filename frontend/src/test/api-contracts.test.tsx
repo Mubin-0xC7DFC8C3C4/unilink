@@ -169,7 +169,8 @@ describe('SearchPage (I-8)', () => {
 describe('TeamsPage (I-8)', () => {
   it('decides a join request with {accept: true}', async () => {
     route = (url, method) => {
-      if (url === '/api/teams') return json([{ id: 2, name: 'Hackers', memberIds: [] }]);
+      if (url === '/api/auth/me') return json({ id: 7 });
+      if (url === '/api/teams') return json([{ id: 2, name: 'Hackers', creatorId: 7, memberIds: [] }]);
       if (url === '/api/teams/2/requests') return json([{ id: 5, userId: 9, status: 'PENDING' }]);
       if (url === '/api/teams/requests/5/decide' && method === 'POST') return json({});
       return defaultRoute(url);
@@ -303,7 +304,7 @@ describe('Admin pages (I-8)', () => {
     renderWithProviders(<Audit />);
     await screen.findByText('VERIFICATION_APPROVED');
     expect(calls.some((c) => c.url === '/api/admin/audit-logs?limit=200')).toBe(true);
-    expect(screen.getByRole('link', { name: 'Export CSV' }).getAttribute('href')).toBe('/api/admin/audit-logs/export');
+    expect(screen.getByRole('link', { name: 'Export CSV (unfiltered)' }).getAttribute('href')).toBe('/api/admin/audit-logs/export?limit=200');
   });
   it('master data reads come from GET /api/public/*', async () => {
     route = (url) => {

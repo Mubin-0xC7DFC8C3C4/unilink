@@ -4,24 +4,48 @@ import com.unilink.identity.event.DomainEvents; import com.unilink.identity.repo
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDateTime;
 import java.util.*;
 /** TeamFormationFacade (ARCH §8): accept is one transaction — member + room member + notification. */
 @Service
 public class TeamService {
   private final TeamRepository teams; private final TeamMemberRepository members; private final TeamJoinRequestRepository requests;
-  private final PostRepository posts; private final ChatRoomRepository rooms; private final RoomMemberRepository roomMembers;
-  private final AccessPolicy policy; private final ApplicationEventPublisher events;
+  private final PostRepository posts; private final EventDetailRepository events; private final ChatRoomRepository rooms; private final RoomMemberRepository roomMembers;
+  private final AccessPolicy policy; private final ApplicationEventPublisher eventsPublisher;
   public TeamService(TeamRepository teams, TeamMemberRepository members, TeamJoinRequestRepository requests,
-      PostRepository posts, ChatRoomRepository rooms, RoomMemberRepository roomMembers,
-      AccessPolicy policy, ApplicationEventPublisher events){
-    this.teams=teams; this.members=members; this.requests=requests; this.posts=posts; this.rooms=rooms;
-    this.roomMembers=roomMembers; this.policy=policy; this.events=events;
+      PostRepository posts, EventDetailRepository events, ChatRoomRepository rooms, RoomMemberRepository roomMembers,
+      AccessPolicy policy, ApplicationEventPublisher eventsPublisher){
+    this.teams=teams; this.members=members; this.requests=requests; this.posts=posts; this.events=events; this.rooms=rooms;
+    this.roomMembers=roomMembers; this.policy=policy; this.eventsPublisher=eventsPublisher;
+  }
+  /** Own-scope visibility (D-016/D-021, same matrix as FeedSpecifications.level
+   *  and PostService.visibleEvents): NATIONAL is open to every verified student;
+   *  UNIVERSITY/DEPARTMENT require the caller's university (and department);
+   *  DEPARTMENT_HUB requires the caller's catalog. Out-of-scope is 404 so
+   *  existence is not leaked. Note PostService.getPost as written returns any
+   *  post to a VERIFIED caller, so it cannot be reused here — the scoped
+   *  matrix above is what actually enforces own-scope. */
+  private boolean isVisibleTo(Post post, Principals.UnilinkUserPrincipal p){
+    return switch (post.getVisibility()){
+      case "NATIONAL" -> true;
+      case "UNIVERSITY" -> post.getScopeUniversityId()!=null && post.getScopeUniversityId().equals(p.universityId());
+      case "DEPARTMENT" -> post.getScopeUniversityId()!=null && post.getScopeUniversityId().equals(p.universityId())
+        && post.getScopeDepartmentId()!=null && post.getScopeDepartmentId().equals(p.departmentId());
+      case "DEPARTMENT_HUB" -> post.getScopeCatalogId()!=null && post.getScopeCatalogId().equals(p.catalogId());
+      default -> false;
+    };
   }
   @Transactional
   public TeamDtos.TeamDto createTeam(Principals.UnilinkUserPrincipal p, Long eventPostId, String name, int maxSize){
     policy.requireVerified(p);
     Post post = posts.findById(eventPostId).orElseThrow(() -> new Exceptions.NotFound("Event"));
     if (!"EVENT".equals(post.getType())) throw new Exceptions.BadRequest("NOT_AN_EVENT","Teams belong to events");
+    if (!isVisibleTo(post, p)) throw new Exceptions.NotFound("Event");
+    if (!"ACTIVE".equals(post.getStatus())) throw new Exceptions.BadRequest("POST_NOT_ACTIVE","Event is not active");
+    EventDetail ev = events.findById(eventPostId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+    if (Boolean.TRUE.equals(ev.getRegistrationClosed())) throw new Exceptions.BadRequest("EVENT_CLOSED","Registration for this event is closed");
+    if (ev.getArchivedAt()!=null || (ev.getDeadline()!=null && ev.getDeadline().isBefore(LocalDateTime.now())))
+      throw new Exceptions.BadRequest("EVENT_PAST","This event has ended");
     if (members.existsByEventPostIdAndUserId(eventPostId, p.userId()))
       throw new Exceptions.Conflict("ALREADY_IN_TEAM","You already belong to a team for this event (D-026)");
     Team t = new Team(); t.setEventPostId(eventPostId); t.setCreatorId(p.userId()); t.setName(name);
@@ -61,7 +85,7 @@ public class TeamService {
     RoomMember rm = new RoomMember(); rm.setRoomId(room.getId()); rm.setUserId(r.getUserId()); rm.setRole("MEMBER"); roomMembers.save(rm);
     long count = members.countByTeamId(t.getId());
     if (count >= t.getMaxSize()){ t.setStatus("FULL"); teams.save(t); }
-    events.publishEvent(new DomainEvents.TeamJoinAccepted(t.getId(), r.getUserId(), t.getEventPostId()));
+    eventsPublisher.publishEvent(new DomainEvents.TeamJoinAccepted(t.getId(), r.getUserId(), t.getEventPostId()));
   }
   @Transactional(readOnly=true)
   public List<TeamDtos.TeamDto> listForEvent(Long eventPostId){ return teams.findByEventPostId(eventPostId).stream().map(TeamDtos.TeamDto::from).toList(); }

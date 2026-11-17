@@ -22,6 +22,7 @@ public class AdminService {
   private final AdminAlertRepository alerts; private final JdbcTemplate jdbc; private final AuditService audit;
   private final AccessPolicy policy; private final PasswordEncoder encoder; private final SessionService sessions;
   private final UserCredentialRepository creds; private final VerificationAttemptRepository attempts;
+  private final AdminTotpSecretRepository totpSecrets;
   private final EventDetailRepository eventDetails; private final FeedService feed;
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
@@ -30,12 +31,14 @@ public class AdminService {
       AppealRepository appeals, SuspensionRecommendationRepository recommendations, AdminAlertRepository alerts,
       JdbcTemplate jdbc, AuditService audit, AccessPolicy policy, PasswordEncoder encoder, SessionService sessions,
       UserCredentialRepository creds, VerificationAttemptRepository attempts,
+      AdminTotpSecretRepository totpSecrets,
       EventDetailRepository eventDetails, FeedService feed){
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
     this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
     this.appeals=appeals; this.recommendations=recommendations; this.alerts=alerts; this.jdbc=jdbc; this.audit=audit;
     this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds; this.attempts=attempts;
+    this.totpSecrets=totpSecrets;
     this.eventDetails=eventDetails; this.feed=feed;
   }
   /** Dashboard: real SQL counts only (FR-ADM-02). Moderators see their university only. */
@@ -103,12 +106,17 @@ public class AdminService {
     loadUser(admin, r.getUserId());
     return r.getIdCardKey();
   }
-  /** Suspend/ban/reactivate/revoke/force-reset — reason mandatory, sessions revoked (FR-ADM-04). */
+  /** Suspend/ban/reactivate/revoke/force-reset — reason mandatory, sessions revoked (FR-ADM-04).
+   *  FORCE_RESET returns the generated temporary password ONCE in the result
+   *  (mirroring resetModeratorCredentials); it is never logged or stored in
+   *  plaintext. All other actions return a null temporary password. */
+  public record UserActionResult(AdminUserDto user, String temporaryPassword) {}
   @Transactional
-  public AdminUserDto changeUserState(Principals.AdminPrincipal admin, Long userId, String action, String reason, String ip){
+  public UserActionResult changeUserState(Principals.AdminPrincipal admin, Long userId, String action, String reason, String ip){
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
     User u = loadUser(admin, userId);
     String from = u.getState();
+    String temporaryPassword = null;
     switch (action){
       case "SUSPEND" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name()); }
       case "BAN" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.BANNED).name()); }
@@ -116,15 +124,15 @@ public class AdminService {
       case "REVOKE" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.REGISTERED).name()); }
       case "FORCE_RESET" -> {
         UserCredential c = creds.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
-        String tmp = UUID.randomUUID().toString().substring(0,12)+"A1";
-        c.setPasswordHash(encoder.encode(tmp)); creds.save(c);
+        temporaryPassword = UUID.randomUUID().toString().substring(0,12)+"A1";
+        c.setPasswordHash(encoder.encode(temporaryPassword)); creds.save(c);
       }
       default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown user action");
     }
     users.save(u);
     sessions.invalidateAllSessions(u.getEmail());
     audit.write(admin.adminId(), "USER_"+action, "USER", userId, reason, Map.of("from", from), ip);
-    return AdminUserDto.from(u);
+    return new UserActionResult(AdminUserDto.from(u), temporaryPassword);
   }
   /** Moderator recommends suspension; only a Platform Admin confirms it (D-036). */
   @Transactional
@@ -159,10 +167,20 @@ public class AdminService {
     if ("PLATFORM_ADMIN".equals(admin.role())) return recommendations.findByStatusOrderByCreatedAtAsc("PENDING").stream().map(SuspensionRecommendationDto::from).toList();
     return recommendations.findByModeratorIdOrderByCreatedAtDesc(admin.adminId()).stream().map(SuspensionRecommendationDto::from).toList();
   }
-  /** Pending appeals (no university scoping, as before). */
+  /** Pending appeals, scoped to the caller's university (moderators see only
+   *  appeals from users of their own university; out-of-scope appeals are not
+   *  listed, so their existence is not leaked). */
   @Transactional(readOnly=true)
-  public List<AppealDto> pendingAppeals(){
-    return appeals.findByStatusOrderByCreatedAtAsc("PENDING").stream().map(AppealDto::from).toList();
+  public List<AppealDto> pendingAppeals(Principals.AdminPrincipal admin){
+    List<Appeal> all = appeals.findByStatusOrderByCreatedAtAsc("PENDING");
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(AppealDto::from).toList();
+    return all.stream().filter(a -> admin.universityId()!=null && admin.universityId().equals(appealUniversityId(a)))
+      .map(AppealDto::from).toList();
+  }
+  /** The university an appeal belongs to, via its appellant. Unknown appellant
+   *  (deleted user) maps to null, i.e. out of scope for every moderator. */
+  private Long appealUniversityId(Appeal a){
+    return users.findById(a.getAppellantId()).map(User::getUniversityId).orElse(null);
   }
   /** Overdue-verification alerts for the calling admin. */
   @Transactional(readOnly=true)
@@ -183,6 +201,8 @@ public class AdminService {
       }
       case "COMMENT" -> {
         Comment c = comments.findById(targetId).orElseThrow(() -> new Exceptions.NotFound("Comment"));
+        Post p = posts.findById(c.getPostId()).orElseThrow(() -> new Exceptions.NotFound("Post"));
+        policy.requireModeratorScopeOr404(admin, p.getScopeUniversityId());
         c.setStatus(switch (action){ case "HIDE" -> "HIDDEN_ADMIN"; case "REMOVE" -> "REMOVED";
           case "RESTORE" -> "ACTIVE"; case "EDIT_REQUEST" -> "EDIT_REQUESTED"; default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown action"); });
         comments.save(c);
@@ -195,6 +215,7 @@ public class AdminService {
   public AppealDto decideAppeal(Principals.AdminPrincipal admin, Long appealId, boolean accept, String reason, String ip){
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
     Appeal a = appeals.findById(appealId).orElseThrow(() -> new Exceptions.NotFound("Appeal"));
+    policy.requireModeratorScopeOr404(admin, appealUniversityId(a));
     if (!"PENDING".equals(a.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Appeal already decided");
     a.setStatus(accept?"ACCEPTED":"REJECTED"); a.setDecidedBy(admin.adminId()); a.setDecisionReason(reason);
     a.setDecidedAt(LocalDateTime.now()); appeals.save(a);
@@ -226,7 +247,10 @@ public class AdminService {
   // ---- announcements (D-039) ----
   @Transactional
   public AnnouncementDto createAnnouncement(Principals.AdminPrincipal admin, String title, String body, String scope, Long universityId, LocalDateTime expiresAt, String ip){
-    if ("UNIVERSITY".equals(scope) && !"PLATFORM_ADMIN".equals(admin.role())) policy.requireModeratorScopeOr404(admin, universityId);
+    if (scope==null || (!"GLOBAL".equals(scope) && !"UNIVERSITY".equals(scope)))
+      throw new Exceptions.BadRequest("INVALID_SCOPE","Announcement scope must be GLOBAL or UNIVERSITY");
+    if ("GLOBAL".equals(scope)) policy.requirePlatformAdmin(admin);
+    else policy.requireModeratorScopeOr404(admin, universityId);
     Announcement a = new Announcement(); a.setAdminId(admin.adminId()); a.setTitle(title); a.setBody(body);
     a.setScope(scope); a.setUniversityId("GLOBAL".equals(scope)?null:universityId); a.setExpiresAt(expiresAt); a.setActive(true);
     a = announcements.save(a);
@@ -292,6 +316,7 @@ public class AdminService {
   }
   @Transactional(readOnly=true)
   public List<AuditLogDto> auditLogs(Principals.AdminPrincipal admin, int limit){
+    if (limit<0) throw new Exceptions.BadRequest("INVALID_LIMIT","limit must be >= 0");
     // Moderators see only their university's actions: audit rows carry no university, so moderators see
     // only rows whose target is a user of their university or their own actions. (Documented limitation.)
     List<AuditLog> all = auditLogs.findAll(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC,"id"));
@@ -333,6 +358,12 @@ public class AdminService {
   public AdminAccountDto updateModerator(Principals.AdminPrincipal admin, Long id, String email, Long universityId, Boolean active){
     policy.requirePlatformAdmin(admin);
     AdminAccount a = admins.findById(id).orElseThrow(() -> new Exceptions.NotFound("Admin"));
+    if (email!=null && (email.isBlank() || !email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")))
+      throw new Exceptions.BadRequest("INVALID_EMAIL","Admin email must be a valid email address");
+    if (admin.adminId().equals(id) && Boolean.FALSE.equals(active))
+      throw new Exceptions.BadRequest("SELF_DEACTIVATE","You cannot deactivate your own account");
+    if (admin.adminId().equals(id) && email!=null && !email.isBlank() && !email.equals(a.getEmail()))
+      throw new Exceptions.BadRequest("SELF_EMAIL_CHANGE","You cannot change your own email address");
     if (email!=null && !email.isBlank() && !email.equals(a.getEmail())){
       if (admins.findByEmail(email).isPresent()) throw new Exceptions.Conflict("EMAIL_TAKEN","Admin email already exists");
       a.setEmail(email);
@@ -345,13 +376,18 @@ public class AdminService {
   public record ResetCredentialsResult(AdminAccountDto admin, String temporaryPassword) {}
   /** Reset an admin's credentials (FR-ADM-12): the temporary password is
    *  returned ONCE in this response (like the TOTP recovery codes) and never
-   *  stored or logged in plaintext. The admin must change it on next login. */
+   *  stored or logged in plaintext. The temporary password stays valid until
+   *  the admin changes it voluntarily — there is no must-change-on-next-login
+   *  enforcement (no admin password-change endpoint exists). The stale TOTP
+   *  secret row is deleted so the old secret does not linger; totpEnrolled=false
+   *  forces re-enrolment with a fresh secret. */
   @Transactional
   public ResetCredentialsResult resetModeratorCredentials(Principals.AdminPrincipal admin, Long id, String ip){
     policy.requirePlatformAdmin(admin);
     AdminAccount a = admins.findById(id).orElseThrow(() -> new Exceptions.NotFound("Admin"));
     String tmp = UUID.randomUUID().toString().substring(0,12)+"A1";
     a.setPasswordHash(encoder.encode(tmp)); a.setTotpEnrolled(false); admins.save(a);
+    if (totpSecrets.existsById(id)) totpSecrets.deleteById(id);
     sessions.invalidateAllSessions(a.getEmail());
     audit.write(admin.adminId(), "ADMIN_CREDENTIALS_RESET", "ADMIN", id, null, Map.of(), ip);
     return new ResetCredentialsResult(AdminAccountDto.from(a), tmp);
@@ -360,6 +396,7 @@ public class AdminService {
   @Transactional
   public UniversityDto updateUniversity(Principals.AdminPrincipal admin, Long id, String name, String shortName, String emailDomains, Boolean active, String ip){
     policy.requirePlatformAdmin(admin);
+    if (name!=null && name.isBlank()) throw new Exceptions.BadRequest("NAME_REQUIRED","A university needs a name");
     University u = universities.findById(id).orElseThrow(() -> new Exceptions.NotFound("University"));
     if (name!=null) u.setName(name);
     if (shortName!=null) u.setShortName(shortName);
@@ -372,6 +409,7 @@ public class AdminService {
   @Transactional
   public DepartmentDto updateDepartment(Principals.AdminPrincipal admin, Long id, String name, Boolean active, String ip){
     policy.requirePlatformAdmin(admin);
+    if (name!=null && name.isBlank()) throw new Exceptions.BadRequest("NAME_REQUIRED","A department needs a name");
     Department d = departments.findById(id).orElseThrow(() -> new Exceptions.NotFound("Department"));
     if (name!=null) d.setName(name);
     if (active!=null) d.setActive(active);
@@ -382,6 +420,7 @@ public class AdminService {
   @Transactional
   public SectorTagDto updateSector(Principals.AdminPrincipal admin, Long id, String name, Boolean active, String ip){
     policy.requirePlatformAdmin(admin);
+    if (name!=null && name.isBlank()) throw new Exceptions.BadRequest("NAME_REQUIRED","A sector needs a name");
     SectorTag s = sectors.findById(id).orElseThrow(() -> new Exceptions.NotFound("Sector"));
     if (name!=null) s.setName(name);
     if (active!=null) s.setActive(active);
@@ -393,6 +432,13 @@ public class AdminService {
   public BatchDto createBatch(Principals.AdminPrincipal admin, Long universityId, Long departmentId, String label, Integer startYear, String ip){
     policy.requirePlatformAdmin(admin);
     if (label==null || label.isBlank()) throw new Exceptions.BadRequest("LABEL_REQUIRED","A batch needs a label");
+    if (universityId==null || universities.findById(universityId).isEmpty())
+      throw new Exceptions.NotFound("University");
+    if (departmentId==null || departments.findById(departmentId).isEmpty())
+      throw new Exceptions.NotFound("Department");
+    boolean duplicate = batches.findByUniversityIdAndDepartmentIdAndActiveTrue(universityId, departmentId).stream()
+      .anyMatch(b -> label.equals(b.getLabel()));
+    if (duplicate) throw new Exceptions.Conflict("BATCH_EXISTS","A batch with this label already exists for the university and department");
     Batch b = new Batch(); b.setUniversityId(universityId); b.setDepartmentId(departmentId);
     b.setLabel(label); b.setStartYear(startYear); b.setActive(true);
     b = batches.save(b);
@@ -402,6 +448,7 @@ public class AdminService {
   @Transactional
   public BatchDto updateBatch(Principals.AdminPrincipal admin, Long id, String label, Integer startYear, Boolean active, String ip){
     policy.requirePlatformAdmin(admin);
+    if (label!=null && label.isBlank()) throw new Exceptions.BadRequest("LABEL_REQUIRED","A batch needs a label");
     Batch b = batches.findById(id).orElseThrow(() -> new Exceptions.NotFound("Batch"));
     if (label!=null) b.setLabel(label);
     if (startYear!=null) b.setStartYear(startYear);

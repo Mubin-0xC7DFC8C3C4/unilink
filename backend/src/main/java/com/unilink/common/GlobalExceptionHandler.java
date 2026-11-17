@@ -2,6 +2,7 @@ package com.unilink.common;
 import jakarta.servlet.http.HttpServletRequest; import jakarta.validation.ConstraintViolationException;
 import org.slf4j.*; import org.springframework.http.*; import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException; import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import java.util.*;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -25,6 +26,10 @@ public class GlobalExceptionHandler {
   @ExceptionHandler(AccessDeniedException.class)
   public ResponseEntity<ApiError> denied(AccessDeniedException e, HttpServletRequest req){
     return err(HttpStatus.FORBIDDEN,"FORBIDDEN","Access denied", req, null); }
+  @ExceptionHandler(MaxUploadSizeExceededException.class)
+  public ResponseEntity<ApiError> tooLarge(MaxUploadSizeExceededException e, HttpServletRequest req){
+    return err(HttpStatus.PAYLOAD_TOO_LARGE,"FILE_TOO_LARGE",
+      "Uploaded file exceeds the 10 MB limit", req, null); }
   @ExceptionHandler(Exception.class)
   public ResponseEntity<ApiError> other(Exception e, HttpServletRequest req){
     log.error("Unhandled error on {}", req.getRequestURI(), e);
