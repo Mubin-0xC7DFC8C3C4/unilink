@@ -30,6 +30,7 @@ public final class AuthDtos {
   public record PasswordResetRequest(@NotBlank @Email String email) {}
   public record PasswordResetConfirm(@NotBlank @Email String email, @NotBlank String otp, @NotBlank String newPassword) {}
   public record ChangePasswordRequest(@NotBlank String oldPassword, @NotBlank String newPassword) {}
+  public record DeleteAccountRequest(@NotBlank String password) {}
   public record UserDto(Long id, String fullName, String email, String phone, Long universityId, Long departmentId,
                         Long batchId, String studentId, String state, boolean phoneVerified, boolean emailVerified,
                         LocalDateTime createdAt) {}

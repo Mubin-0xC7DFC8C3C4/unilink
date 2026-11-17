@@ -1,5 +1,6 @@
 package com.unilink.identity.api;
 import com.unilink.identity.dto.AuthDtos.*;
+import com.unilink.identity.service.AccountDeletionService;
 import com.unilink.identity.service.AuthService;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
 import jakarta.servlet.http.*; import jakarta.validation.Valid;
@@ -12,9 +13,9 @@ import java.util.Map;
 /** Student auth + verification (FR-AUTH-01..13, D-010..D-017). Sessions are server-side (UL_SESSION). */
 @RestController
 public class AuthController {
-  private final AuthService auth; private final AccessPolicy policy;
+  private final AuthService auth; private final AccessPolicy policy; private final AccountDeletionService deletion;
   private final HttpSessionSecurityContextRepository contextRepo = new HttpSessionSecurityContextRepository();
-  public AuthController(AuthService auth, AccessPolicy policy){ this.auth=auth; this.policy=policy; }
+  public AuthController(AuthService auth, AccessPolicy policy, AccountDeletionService deletion){ this.auth=auth; this.policy=policy; this.deletion=deletion; }
   private void saveAuth(HttpServletRequest req, HttpServletResponse res, Authentication a){
     SecurityContextHolder.getContext().setAuthentication(a);
     req.getSession(true); // session fixation: migrate on login via SecurityConfig
@@ -56,6 +57,13 @@ public class AuthController {
   @GetMapping("/api/auth/me") public UserDto me(Authentication authn){
     var p = policy.requireStudent(authn.getPrincipal());
     return AuthService.toDto(auth.getUserOr404(p.userId()));
+  }
+  @PostMapping("/api/me/delete") public Map<String,Object> deleteMe(Authentication authn, @Valid @RequestBody DeleteAccountRequest r, HttpServletRequest req){
+    var p = policy.requireStudent(authn.getPrincipal());
+    deletion.deleteOwnAccount(p.userId(), r.password(), req.getRemoteAddr());
+    HttpSession s = req.getSession(false); if (s!=null) s.invalidate();
+    SecurityContextHolder.clearContext();
+    return Map.of("deleted", true);
   }
   @GetMapping("/api/auth/verification/status") public VerificationStatusDto status(Authentication authn){
     var p = policy.requireStudent(authn.getPrincipal());
