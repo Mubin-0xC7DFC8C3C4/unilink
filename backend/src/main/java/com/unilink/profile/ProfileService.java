@@ -2,6 +2,7 @@ package com.unilink.profile;
 import com.unilink.common.Exceptions; import com.unilink.community.FeedService;
 import com.unilink.identity.domain.*;
 import com.unilink.identity.repo.*; import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
@@ -177,24 +178,28 @@ public class ProfileService {
           && post.getScopeCatalogId()!=null && post.getScopeCatalogId().equals(viewer.catalogId()));
   }
   // ---- profile photo / cover upload (FR-PROF-01): photo ≤2 MB, cover ≤5 MB
-  //  (D-029a); the previous stored object is deleted so stale files do not accumulate. ----
+  //  (D-029a); images are EXIF-stripped before storage (D-106); the previous
+  //  stored object is deleted so stale files do not accumulate. The new object
+  //  is stored BEFORE the old one is deleted, so a failed store never loses
+  //  the current photo/cover. The caller can only ever replace their OWN
+  //  photo/cover: the key deleted is the one read from their own row (D-107). ----
   @Transactional
   public void uploadPhoto(Long userId, String fileName, String contentType, byte[] bytes){
     if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
-    String sniffed = uploads.sniffContentType(bytes, contentType);
-    uploads.validateImage(bytes, UploadValidator.PHOTO_MAX, contentType);
+    String sniffed = uploads.validateImage(bytes, UploadValidator.PHOTO_MAX, contentType);
+    byte[] stored = ExifStripper.strip(bytes);
     User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
-    String key = storage.store("profile-photos", fileName, sniffed, bytes);
+    String key = storage.store("profile-photos", UploadValidator.sanitizeFileName(fileName), sniffed, stored);
     if (u.getProfilePhotoKey()!=null) storage.delete(u.getProfilePhotoKey());
     u.setProfilePhotoKey(key); users.save(u);
   }
   @Transactional
   public void uploadCover(Long userId, String fileName, String contentType, byte[] bytes){
     if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
-    String sniffed = uploads.sniffContentType(bytes, contentType);
-    uploads.validateImage(bytes, UploadValidator.COVER_MAX, contentType);
+    String sniffed = uploads.validateImage(bytes, UploadValidator.COVER_MAX, contentType);
+    byte[] stored = ExifStripper.strip(bytes);
     Profile p = profiles.findById(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
-    String key = storage.store("profile-covers", fileName, sniffed, bytes);
+    String key = storage.store("profile-covers", UploadValidator.sanitizeFileName(fileName), sniffed, stored);
     if (p.getCoverKey()!=null) storage.delete(p.getCoverKey());
     p.setCoverKey(key); profiles.save(p);
   }

@@ -2,6 +2,7 @@ package com.unilink.messaging;
 import com.unilink.common.Exceptions; import com.unilink.identity.domain.*;
 import com.unilink.identity.event.DomainEvents; import com.unilink.identity.repo.*;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
@@ -175,11 +176,13 @@ public class MessagingService {
   }
   @Transactional(readOnly=true)
   public List<RoomDto> myRooms(Principals.UnilinkUserPrincipal p){
+    policy.requireVerified(p);
     return roomMembers.findByUserId(p.userId()).stream()
       .map(rm -> rooms.findById(rm.getRoomId())).flatMap(Optional::stream).map(this::toDto).toList();
   }
   @Transactional(readOnly=true)
   public List<RoomDto> searchRooms(Principals.UnilinkUserPrincipal p, String q){
+    policy.requireVerified(p);
     // D-029: search conversation names and participants only, never message bodies.
     String needle = q==null?"":q.toLowerCase();
     return myRooms(p).stream().filter(r -> r.name()!=null && r.name().toLowerCase().contains(needle)).toList();
@@ -202,33 +205,38 @@ public class MessagingService {
     events.publishEvent(new DomainEvents.MessageSent(m.getId(), room.getId(), p.userId()));
     return dto;
   }
-  /** Send a message with one file attached (FR-MSG-07, ≤10 MB image/PDF). */
+  /** Send a message with one file attached (FR-MSG-07, ≤10 MB image/PDF).
+   *  D-105: one attachment per message by API design — there is no call that
+   *  adds a second file to a message. D-106: images are EXIF-stripped first. */
   @Transactional
   public MessageDto sendMessageWithAttachment(Principals.UnilinkUserPrincipal p, String roomPublicId,
       String body, String fileName, String contentType, byte[] bytes){
     if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
-    String sniffed = uploads.sniffContentType(bytes, contentType);
-    uploads.validateAttachment(bytes, UploadValidator.ATTACHMENT_MAX);
-    String text = (body==null || body.isBlank()) ? fileName : body;
+    String sniffed = uploads.validateAttachment(bytes, UploadValidator.ATTACHMENT_MAX);
+    byte[] stored = ExifStripper.strip(bytes);
+    String safeName = UploadValidator.sanitizeFileName(fileName);
+    String text = (body==null || body.isBlank()) ? safeName : body;
     MessageDto dto = sendMessage(p, roomPublicId, text, UUID.randomUUID().toString());
     MessageAttachment a = new MessageAttachment();
     a.setMessageId(dto.id());
-    a.setStorageKey(storage.store("message-attachments", fileName, sniffed, bytes));
-    a.setFileName(fileName); a.setContentType(sniffed); a.setSizeBytes((long) bytes.length);
+    a.setStorageKey(storage.store("message-attachments", safeName, sniffed, stored));
+    a.setFileName(safeName); a.setContentType(sniffed); a.setSizeBytes((long) stored.length);
     messageAttachments.save(a);
     return new MessageDto(dto.id(), dto.publicId(), dto.roomId(), dto.senderId(), dto.body(), dto.createdAt(), dto.read(), true);
   }
   @Transactional(readOnly=true)
   public List<AttachmentDto> listMessageAttachments(Principals.UnilinkUserPrincipal p, String roomPublicId, Long messageId){
+    policy.requireVerified(p);
     ChatRoom room = rooms.findByPublicId(roomPublicId).orElseThrow(() -> new Exceptions.NotFound("Room"));
     roomMembers.findByRoomIdAndUserId(room.getId(), p.userId()).orElseThrow(() -> new Exceptions.NotFound("Room"));
     Message m = messages.findById(messageId).orElseThrow(() -> new Exceptions.NotFound("Message"));
     if (!room.getId().equals(m.getRoomId())) throw new Exceptions.NotFound("Message");
     return messageAttachments.findByMessageId(messageId).stream()
-      .map(a -> new AttachmentDto(a.getId(), a.getFileName(), a.getContentType(), a.getSizeBytes(), null)).toList();
+      .map(a -> new AttachmentDto(a.getId(), a.getFileName(), a.getContentType(), a.getSizeBytes(), a.getCreatedAt())).toList();
   }
   @Transactional(readOnly=true)
   public AttachmentFile openMessageAttachment(Principals.UnilinkUserPrincipal p, String roomPublicId, Long messageId, Long attachmentId){
+    policy.requireVerified(p);
     ChatRoom room = rooms.findByPublicId(roomPublicId).orElseThrow(() -> new Exceptions.NotFound("Room"));
     roomMembers.findByRoomIdAndUserId(room.getId(), p.userId()).orElseThrow(() -> new Exceptions.NotFound("Room"));
     MessageAttachment a = messageAttachments.findById(attachmentId).orElseThrow(() -> new Exceptions.NotFound("Attachment"));
@@ -259,6 +267,7 @@ public class MessagingService {
   }
   @Transactional(readOnly=true)
   public List<MessageDto> listMessages(Principals.UnilinkUserPrincipal p, String roomPublicId, int limit){
+    policy.requireVerified(p);
     ChatRoom room = rooms.findByPublicId(roomPublicId).orElseThrow(() -> new Exceptions.NotFound("Room"));
     roomMembers.findByRoomIdAndUserId(room.getId(), p.userId()).orElseThrow(() -> new Exceptions.NotFound("Room"));
     List<Message> found = messages.findByRoomIdOrderByIdDesc(room.getId(), PageRequest.of(0, Math.min(Math.max(limit,1),50)));
@@ -271,6 +280,7 @@ public class MessagingService {
   }
   @Transactional
   public void markRead(Principals.UnilinkUserPrincipal p, String roomPublicId, Long messageId){
+    policy.requireVerified(p);
     ChatRoom room = rooms.findByPublicId(roomPublicId).orElseThrow(() -> new Exceptions.NotFound("Room"));
     RoomMember me = roomMembers.findByRoomIdAndUserId(room.getId(), p.userId()).orElseThrow(() -> new Exceptions.NotFound("Room"));
     me.setLastReadMessageId(messageId); roomMembers.save(me);

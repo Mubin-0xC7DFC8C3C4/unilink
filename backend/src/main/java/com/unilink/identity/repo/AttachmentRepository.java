@@ -8,4 +8,5 @@ import java.time.LocalDateTime;
 
 public interface AttachmentRepository extends JpaRepository<Attachment, Long> {
   List<Attachment> findByOwnerTypeAndOwnerId(String ownerType, Long ownerId);
+  long countByOwnerTypeAndOwnerId(String ownerType, Long ownerId);
 }

@@ -76,7 +76,7 @@ public class ProfileController {
     return service.updateProject(p.userId(), id, r.title(), r.description(), r.url());
   }
   @DeleteMapping("/me/projects/{id}") public Map<String,String> deleteProject(Authentication a, @PathVariable Long id){
-    var p = policy.requireStudent(a.getPrincipal()); service.deleteProject(p.userId(), id); return Map.of("status","deleted");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.deleteProject(p.userId(), id); return Map.of("status","deleted");
   }
   @PostMapping("/me/education") public ProfileDtos.EducationEntryDto addEducation(Authentication a, @RequestBody TextPayload r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
@@ -93,7 +93,7 @@ public class ProfileController {
     return service.updateEducation(p.userId(), id, r.institution(), r.degree(), r.year());
   }
   @DeleteMapping("/me/education/{id}") public Map<String,String> deleteEducation(Authentication a, @PathVariable Long id){
-    var p = policy.requireStudent(a.getPrincipal()); service.deleteEducation(p.userId(), id); return Map.of("status","deleted");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.deleteEducation(p.userId(), id); return Map.of("status","deleted");
   }
   @PostMapping("/me/achievements") public ProfileDtos.AchievementDto addAchievement(Authentication a, @RequestBody TextPayload r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
@@ -110,28 +110,28 @@ public class ProfileController {
     return service.updateAchievement(p.userId(), id, r.title(), r.description(), r.year());
   }
   @DeleteMapping("/me/achievements/{id}") public Map<String,String> deleteAchievement(Authentication a, @PathVariable Long id){
-    var p = policy.requireStudent(a.getPrincipal()); service.deleteAchievement(p.userId(), id); return Map.of("status","deleted");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.deleteAchievement(p.userId(), id); return Map.of("status","deleted");
   }
   @PostMapping("/me/skills") public Map<String,String> addSkill(Authentication a, @RequestBody Map<String,String> r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     service.addSkill(p.userId(), r.get("name")); return Map.of("status","added");
   }
   @DeleteMapping("/me/skills/{skillId}") public Map<String,String> removeSkill(Authentication a, @PathVariable Long skillId){
-    var p = policy.requireStudent(a.getPrincipal()); service.removeSkill(p.userId(), skillId); return Map.of("status","removed");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.removeSkill(p.userId(), skillId); return Map.of("status","removed");
   }
   @PostMapping("/me/sectors/{sectorId}") public Map<String,String> followSector(Authentication a, @PathVariable Long sectorId){
-    var p = policy.requireStudent(a.getPrincipal()); service.followSector(p.userId(), sectorId); return Map.of("status","followed");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.followSector(p.userId(), sectorId); return Map.of("status","followed");
   }
   /** Sector unfollow (FR-SEC-02): there was only a follow endpoint. */
   @DeleteMapping("/me/sectors/{sectorId}") public Map<String,String> unfollowSector(Authentication a, @PathVariable Long sectorId){
-    var p = policy.requireStudent(a.getPrincipal()); service.unfollowSector(p.userId(), sectorId); return Map.of("status","unfollowed");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.unfollowSector(p.userId(), sectorId); return Map.of("status","unfollowed");
   }
   @PostMapping("/{id}/follow") public Map<String,String> follow(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     service.follow(p.userId(), id); return Map.of("status","followed");
   }
   @DeleteMapping("/{id}/follow") public Map<String,String> unfollow(Authentication a, @PathVariable Long id){
-    var p = policy.requireStudent(a.getPrincipal()); service.unfollow(p.userId(), id); return Map.of("status","unfollowed");
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.unfollow(p.userId(), id); return Map.of("status","unfollowed");
   }
   public record IdentityChangeRequest(Long newUniversityId, Long newDepartmentId, String newStudentId) {}
   @PostMapping("/me/identity-change") public IdentityChangeRequest submitIdentityChange(Authentication a, @RequestBody IdentityChangeRequest r){

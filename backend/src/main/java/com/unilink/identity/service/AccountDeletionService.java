@@ -3,6 +3,7 @@ import com.unilink.audit.AuditService;
 import com.unilink.common.Exceptions;
 import com.unilink.identity.domain.User;
 import com.unilink.identity.domain.UserCredential;
+import com.unilink.identity.domain.VerificationRequest;
 import com.unilink.identity.repo.UserCredentialRepository;
 import com.unilink.identity.repo.UserRepository;
 import com.unilink.identity.repo.VerificationRequestRepository;
@@ -46,10 +47,13 @@ public class AccountDeletionService {
     Set<String> keys = new HashSet<>();
     if (u.getIdCardKey()!=null) keys.add(u.getIdCardKey());
     if (u.getProfilePhotoKey()!=null) keys.add(u.getProfilePhotoKey());
-    requests.findTopByUserIdOrderBySubmittedAtDesc(userId).ifPresent(r -> {
+    // I-18: collect storage keys from ALL of the user's verification requests,
+    // not only the latest — a resubmitted request leaves an older ID image
+    // (and photo) behind that would otherwise orphan in private storage.
+    for (VerificationRequest r : requests.findByUserIdOrderBySubmittedAtDesc(userId)){
       if (r.getIdCardKey()!=null) keys.add(r.getIdCardKey());
       if (r.getProfilePhotoKey()!=null) keys.add(r.getProfilePhotoKey());
-    });
+    }
     keys.forEach(storage::delete);
     audit.write(null, "ACCOUNT_DELETED", "USER", userId,
       "Self-service account deletion (NFR-PRV-02, D-052)", Map.of("state", "DELETED"), ip);

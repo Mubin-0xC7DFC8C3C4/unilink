@@ -53,7 +53,14 @@ public class ScheduledJobs {
       if (r.getDecidedAt()==null || r.getIdCardKey()==null) continue;
       int keep = "APPROVED".equals(r.getStatus()) ? 7 : 30;
       if (r.getDecidedAt().isBefore(LocalDateTime.now().minusDays(keep))){
-        storage.delete(r.getIdCardKey()); r.setIdCardKey(null); requests.save(r);
+        String key = r.getIdCardKey();
+        storage.delete(key); r.setIdCardKey(null); requests.save(r);
+        // I-18: the user's own idCardKey usually points at the same object
+        // (registration stores one key on both rows). Null it too, or the
+        // user row keeps pointing at a deleted object.
+        users.findById(r.getUserId()).ifPresent(u -> {
+          if (key.equals(u.getIdCardKey())){ u.setIdCardKey(null); users.save(u); }
+        });
       }
     }
   }

@@ -16,7 +16,9 @@ public class TeamController {
   @GetMapping public List<TeamDtos.TeamDto> mine(Authentication a){
     var p = policy.requireStudent(a.getPrincipal()); return teams.listMyTeams(p);
   }
-  @GetMapping("/event/{eventPostId}") public List<TeamDtos.TeamDto> forEvent(@PathVariable Long eventPostId){ return teams.listForEvent(eventPostId); }
+  @GetMapping("/event/{eventPostId}") public List<TeamDtos.TeamDto> forEvent(Authentication a, @PathVariable Long eventPostId){
+    var p = policy.requireStudent(a.getPrincipal()); return teams.listForEvent(eventPostId, p);
+  }
   @PostMapping("/{teamId}/join") public TeamDtos.TeamJoinRequestDto join(Authentication a, @PathVariable Long teamId, @RequestBody(required=false) JoinBody r){
     var p = policy.requireStudent(a.getPrincipal());
     return teams.requestJoin(p, teamId, r==null?null:r.message());

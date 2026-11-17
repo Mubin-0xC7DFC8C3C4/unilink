@@ -13,9 +13,16 @@ public class OcrJobService {
   @Async("ocrExecutor")
   @Retryable(retryFor = Exception.class, maxAttempts = 3, backoff = @Backoff(delay = 5000, multiplier = 2))
   public void runOcr(Long requestId, String idCardKey, String fullName, String studentId){
+    runOcr(requestId, idCardKey, fullName, studentId, null);
+  }
+  /** I-12: the university name is passed through so the scorer can compare
+   *  it (FR-AUTH-06). */
+  @Async("ocrExecutor")
+  @Retryable(retryFor = Exception.class, maxAttempts = 3, backoff = @Backoff(delay = 5000, multiplier = 2))
+  public void runOcr(Long requestId, String idCardKey, String fullName, String studentId, String universityName){
     try {
       byte[] bytes = storage.open(idCardKey).readAllBytes();
-      OcrProvider.Result r = ocr.extract(bytes, idCardKey, fullName, studentId);
+      OcrProvider.Result r = ocr.extract(bytes, idCardKey, fullName, studentId, universityName);
       update(requestId, r);
     } catch (Exception e){
       log.warn("OCR job failed for request {}", requestId, e);

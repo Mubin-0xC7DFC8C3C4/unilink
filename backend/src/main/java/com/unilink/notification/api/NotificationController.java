@@ -21,7 +21,7 @@ public class NotificationController {
   }
   public record PrefBody(String type, boolean emailEnabled, boolean inAppEnabled) {}
   @PostMapping("/preferences") public Map<String,String> pref(Authentication a, @RequestBody PrefBody r){
-    var p = policy.requireStudent(a.getPrincipal());
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     svc.setPreference(p.userId(), r.type(), r.emailEnabled(), r.inAppEnabled()); return Map.of("status","saved");
   }
 }

@@ -9,5 +9,6 @@ public class MessageAttachment {
   @Column(name="file_name") private String fileName;
   @Column(name="content_type") private String contentType;
   @Column(name="size_bytes") private Long sizeBytes;
-  @PrePersist void onCreate(){}
+  @Column(name="created_at") private LocalDateTime createdAt;
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
 }

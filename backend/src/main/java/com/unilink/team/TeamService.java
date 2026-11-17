@@ -87,8 +87,19 @@ public class TeamService {
     if (count >= t.getMaxSize()){ t.setStatus("FULL"); teams.save(t); }
     eventsPublisher.publishEvent(new DomainEvents.TeamJoinAccepted(t.getId(), r.getUserId(), t.getEventPostId()));
   }
+  /** I-15: teams for an event now require an authenticated caller and the
+   *  event to be visible to them (same rule as PostService.getPost: verified
+   *  callers see any event, unverified callers NATIONAL only). Previously the
+   *  controller took no Authentication at all. */
   @Transactional(readOnly=true)
-  public List<TeamDtos.TeamDto> listForEvent(Long eventPostId){ return teams.findByEventPostId(eventPostId).stream().map(TeamDtos.TeamDto::from).toList(); }
+  public List<TeamDtos.TeamDto> listForEvent(Long eventPostId, Principals.UnilinkUserPrincipal p){
+    Post post = posts.findById(eventPostId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+    if (!"EVENT".equals(post.getType())) throw new Exceptions.NotFound("Event");
+    if (!"VERIFIED".equals(p.state()) && !"NATIONAL".equals(post.getVisibility()))
+      throw new Exceptions.NotFound("Event"); // D-016
+    if ("VERIFIED".equals(p.state()) && !isVisibleTo(post, p)) throw new Exceptions.NotFound("Event");
+    return teams.findByEventPostId(eventPostId).stream().map(TeamDtos.TeamDto::from).toList();
+  }
   /** Teams the caller created or joined (drives the Teams page list). */
   @Transactional(readOnly=true)
   public List<TeamDtos.TeamDto> listMyTeams(Principals.UnilinkUserPrincipal p){

@@ -15,4 +15,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
   long countByState(String state);
   long countByUniversityIdAndState(Long universityId, String state);
   List<User> findByUniversityId(Long universityId);
+  List<User> findByPhone(String phone);
 }

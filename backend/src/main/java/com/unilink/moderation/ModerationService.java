@@ -98,6 +98,12 @@ public class ModerationService {
   public ModerationDtos.AppealDto appeal(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reason){
     policy.requireVerified(p);
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","Appeal reason is required");
+    // I-15: ownership check — only the owner of a hidden item may appeal it.
+    // Without this, any verified student could appeal (and restore) anyone
+    // else's content. Unknown targets are 404; someone else's item is 403.
+    Long ownerId = resolveOwner(targetType, targetId);
+    if (ownerId==null) throw new Exceptions.NotFound("Appeal target");
+    if (!ownerId.equals(p.userId())) throw new Exceptions.Forbidden("Only the owner can appeal this item");
     Appeal a = new Appeal(); a.setAppellantId(p.userId()); a.setTargetType(targetType); a.setTargetId(targetId);
     a.setReason(reason); a.setStatus("PENDING"); return ModerationDtos.AppealDto.from(appeals.save(a));
   }

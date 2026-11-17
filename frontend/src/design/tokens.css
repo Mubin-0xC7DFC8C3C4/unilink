@@ -1,7 +1,7 @@
 /* Generated from DESIGN.md — the ONLY file that may contain raw hex values. */
 :root {
   --background: #fdfdfb; --surface: #ffffff; --surface-muted: #f2f1ed; --border: #e4e2dc;
-  --text-primary: #14140f; --text-secondary: #5b5951; --text-muted: #8b8b8b;
+  --text-primary: #14140f; --text-secondary: #5b5951; --text-muted: #5b5951; /* I-22: was #8b8b8b (3.35:1, below AA); now the secondary value (6.89:1) */
   --primary: #14140f; --on-primary: #fdfdfb; --scrim: #a8a8a5;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", "Noto Sans", sans-serif;
   --display: 2.5rem; --headline: 1.5rem; --title: 1.125rem; --body-lg: 1.125rem; --body-md: 0.875rem; --body-sm: 0.75rem; --label-caps: 0.6875rem; --stat: 1.75rem;
@@ -11,7 +11,7 @@
 }
 [data-theme="dark"] {
   --background: #0e0e0c; --surface: #171715; --surface-muted: #22221e; --border: #262622;
-  --text-primary: #f5f4f0; --text-secondary: #a9a69c; --text-muted: #726f67;
+  --text-primary: #f5f4f0; --text-secondary: #a9a69c; --text-muted: #a9a69c; /* I-22: was #726f67 (3.85:1, below AA); now the secondary value (7.93:1) */
   --primary: #f5f4f0; --on-primary: #0e0e0c; --scrim: #a8a8a5;
 }
 * { box-sizing: border-box; }
