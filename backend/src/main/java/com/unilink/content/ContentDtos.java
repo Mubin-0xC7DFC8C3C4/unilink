@@ -10,4 +10,8 @@ public final class ContentDtos {
   public record BookmarkDto(Long id, Long userId, String targetType, Long targetId, LocalDateTime createdAt){
     public static BookmarkDto from(Bookmark b){ return new BookmarkDto(b.getId(), b.getUserId(), b.getTargetType(), b.getTargetId(), b.getCreatedAt()); }
   }
+  public record AttachmentDto(Long id, String ownerType, Long ownerId, String fileName, String contentType,
+                              Long sizeBytes, LocalDateTime createdAt){
+    public static AttachmentDto from(Attachment a){ return new AttachmentDto(a.getId(), a.getOwnerType(), a.getOwnerId(), a.getFileName(), a.getContentType(), a.getSizeBytes(), a.getCreatedAt()); }
+  }
 }

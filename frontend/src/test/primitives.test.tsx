@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Button, EmptyState, StatStrip, VerifiedBadge, Modal } from '../design/primitives';
+import { useRef, useState, useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { Button, EmptyState, StatStrip, VerifiedBadge, Modal, Input } from '../design/primitives';
 import { signUpSchema } from '../features/auth/SignUp';
 import { toggleTheme, initialTheme } from '../design/theme';
 import { ApiError } from '../api/types';
@@ -18,17 +20,55 @@ describe('primitives', () => {
   it('renders empty state', () => { render(<EmptyState title="No posts yet" body="Nothing here."/>); expect(screen.getByText('No posts yet')).toBeInTheDocument(); });
   it('modal has dialog role', () => { render(<Modal title="Delete account" onClose={()=>{}}>Body</Modal>); expect(screen.getByRole('dialog')).toBeInTheDocument(); });
 });
+describe('Input forwards refs to react-hook-form', () => {
+  function RegisteredForm({ onSubmit }: { onSubmit: (v: { email: string }) => void }) {
+    const { register, handleSubmit } = useForm<{ email: string }>();
+    return <form onSubmit={handleSubmit(onSubmit)}><Input aria-label="Email" {...register('email')} /><button type="submit">Submit</button></form>;
+  }
+  it('a registered Input submits its typed value', async () => {
+    const user = userEvent.setup();
+    let submitted: { email: string } | null = null;
+    render(<RegisteredForm onSubmit={(v) => { submitted = v; }} />);
+    await user.type(screen.getByLabelText('Email'), 'a@b.edu');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(submitted).toEqual({ email: 'a@b.edu' });
+  });
+  it('a callback ref reaches the underlying input element', () => {
+    let node: HTMLInputElement | null = null;
+    render(<Input aria-label="Ref target" ref={(el) => { node = el; }} />);
+    expect(node).toBeInstanceOf(HTMLInputElement);
+    expect(node!.getAttribute('aria-label')).toBe('Ref target');
+  });
+  it('forwards a RefObject to the input', () => {
+    function Probe() {
+      const ref = useRef<HTMLInputElement>(null);
+      const [attached, setAttached] = useState(false);
+      useEffect(() => { setAttached(ref.current instanceof HTMLInputElement); }, []);
+      return <><Input aria-label="Ref object" ref={ref} /><span>{attached ? 'attached' : 'detached'}</span></>;
+    }
+    render(<Probe />);
+    expect(screen.getByText('attached')).toBeInTheDocument();
+  });
+});
 describe('sign-up validation', () => {
+  // I-6: the schema now takes catalog ids (universityId/departmentId/batchId
+  // as numbers) and a Bangladeshi mobile number — the old free-text
+  // university/department/batch shape was the wrong contract.
+  const valid = {fullName:'A B',phone:'01700000000',email:'a@b.edu',universityId:1,departmentId:10,batchId:100,address:'Dhaka',studentId:'1',password:'Strong1pass'};
   it('rejects weak passwords', () => {
-    const r = signUpSchema.safeParse({fullName:'A B',phone:'01700000000',email:'a@b.edu',university:'DU',department:'CSE',batch:'45',address:'Dhaka',studentId:'1',password:'weak'});
+    const r = signUpSchema.safeParse({...valid,password:'weak'});
     expect(r.success).toBe(false);
   });
   it('accepts a strong password', () => {
-    const r = signUpSchema.safeParse({fullName:'A B',phone:'01700000000',email:'a@b.edu',university:'DU',department:'CSE',batch:'45',address:'Dhaka',studentId:'1',password:'Strong1pass'});
+    const r = signUpSchema.safeParse(valid);
     expect(r.success).toBe(true);
   });
   it('rejects bad email', () => {
-    const r = signUpSchema.safeParse({fullName:'A B',phone:'01700000000',email:'not-email',university:'DU',department:'CSE',batch:'45',address:'Dhaka',studentId:'1',password:'Strong1pass'});
+    const r = signUpSchema.safeParse({...valid,email:'not-email'});
+    expect(r.success).toBe(false);
+  });
+  it('rejects a non-Bangladeshi phone number', () => {
+    const r = signUpSchema.safeParse({...valid,phone:'01234567890'});
     expect(r.success).toBe(false);
   });
 });
@@ -38,7 +78,10 @@ describe('theme', () => {
 });
 describe('error mapping', () => {
   it('maps 401/403/404/429', () => {
-    expect(errorMessage(new ApiError(401,{message:'x'}))).toMatch(/not signed in/i);
+    // 401 now says the session expired (error-handling contract): a 401 on
+    // a guarded call redirects to login with that message; a 401 on the
+    // login call itself is rendered as wrong credentials by the login page.
+    expect(errorMessage(new ApiError(401,{message:'x'}))).toMatch(/session has expired/i);
     expect(errorMessage(new ApiError(403,{message:'x'}))).toMatch(/permission/i);
     expect(errorMessage(new ApiError(404,{message:'x'}))).toMatch(/not found/i);
     expect(errorMessage(new ApiError(429,{message:'x'}))).toMatch(/Too many requests/i);

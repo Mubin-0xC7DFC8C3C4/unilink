@@ -7,7 +7,8 @@ import java.time.LocalDateTime; import java.util.*;
 @Service
 public class FeedService {
   public record PostDto(Long id, Long authorId, String authorName, String type, String visibility, String title,
-                        String body, String status, LocalDateTime createdAt, LocalDateTime eventDeadline, String regLink) {}
+                        String body, String status, LocalDateTime createdAt, LocalDateTime eventDeadline, String regLink,
+                        String location) {}
   private final PostRepository posts; private final UserRepository users; private final EventDetailRepository events;
   public FeedService(PostRepository posts, UserRepository users, EventDetailRepository events){
     this.posts=posts; this.users=users; this.events=events; }
@@ -38,6 +39,6 @@ public class FeedService {
     EventDetail ev = "EVENT".equals(post.getType()) ? events.findById(post.getId()).orElse(null) : null;
     return new PostDto(post.getId(), post.getAuthorId(), name, post.getType(), post.getVisibility(),
       post.getTitle(), post.getBody(), post.getStatus(), post.getCreatedAt(),
-      ev==null?null:ev.getDeadline(), ev==null?null:ev.getRegLink());
+      ev==null?null:ev.getDeadline(), ev==null?null:ev.getRegLink(), ev==null?null:ev.getLocation());
   }
 }

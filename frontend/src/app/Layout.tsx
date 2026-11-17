@@ -1,10 +1,15 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import { useTheme } from './ThemeContext';
 import { useAuth } from './auth';
-import { apiPost } from '../api/client';
+import { apiPost, errorMessage } from '../api/client';
 export function Layout(){
   const { theme, toggle } = useTheme(); const { user, setUser } = useAuth(); const nav = useNavigate();
-  const logout = async ()=>{ try{ await apiPost('/auth/logout'); }catch{} setUser(null); nav('/login'); };
+  const [logoutError, setLogoutError] = useState<string|null>(null);
+  // A failed sign-out is surfaced, not swallowed: the local session is
+  // still cleared (the user asked to leave) but the failure is shown so
+  // a dead logout endpoint can never hide behind a silent redirect.
+  const logout = async ()=>{ try{ await apiPost('/auth/logout'); }catch(e){ setLogoutError(errorMessage(e)); } setUser(null); nav('/login'); };
   return <div><header className="header"><div className="header-inner">
     <Link to="/" style={{textDecoration:'none',fontWeight:500}}>UniLink</Link>
     <nav aria-label="Primary"><NavLink to="/feed">Feed</NavLink><NavLink to="/events">Events</NavLink><NavLink to="/teams">Teams</NavLink><NavLink to="/messages">Messages</NavLink><NavLink to="/search">Search</NavLink></nav>
@@ -15,6 +20,7 @@ export function Layout(){
       : <><Link className="btn btn-sm" to="/login">Log in</Link><Link className="btn btn-sm btn-primary" to="/signup">Sign up</Link></>}
     </div></div></header>
     <main><Outlet/></main>
+    {logoutError && <p role="alert" className="field-error container">Sign-out did not complete on the server: {logoutError} Your server session may still be active — sign in again and sign out, or wait for it to expire.</p>}
     <footer className="container" style={{padding:'32px 16px'}}><p className="muted-caption">UniLink — verified student network for Bangladesh universities. Your data is stored on the server, not in this browser.</p></footer>
   </div>;
 }

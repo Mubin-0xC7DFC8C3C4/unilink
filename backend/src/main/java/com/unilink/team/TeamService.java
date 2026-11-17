@@ -65,6 +65,14 @@ public class TeamService {
   }
   @Transactional(readOnly=true)
   public List<TeamDtos.TeamDto> listForEvent(Long eventPostId){ return teams.findByEventPostId(eventPostId).stream().map(TeamDtos.TeamDto::from).toList(); }
+  /** Teams the caller created or joined (drives the Teams page list). */
+  @Transactional(readOnly=true)
+  public List<TeamDtos.TeamDto> listMyTeams(Principals.UnilinkUserPrincipal p){
+    Set<Long> ids = new LinkedHashSet<>();
+    teams.findByCreatorId(p.userId()).forEach(t -> ids.add(t.getId()));
+    members.findByUserId(p.userId()).forEach(m -> ids.add(m.getTeamId()));
+    return teams.findAllById(ids).stream().map(TeamDtos.TeamDto::from).toList();
+  }
   @Transactional(readOnly=true)
   public List<TeamDtos.TeamJoinRequestDto> pendingRequests(Long teamId, Principals.UnilinkUserPrincipal p){
     Team t = teams.findById(teamId).orElseThrow(() -> new Exceptions.NotFound("Team"));

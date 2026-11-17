@@ -73,14 +73,63 @@ public class AdminController {
   @PostMapping("/announcements") public AnnouncementDto announce(Authentication a, @RequestBody AnnouncementBody b, HttpServletRequest req){
     return admin.createAnnouncement(admin(a), b.title(), b.body(), b.scope(), b.universityId(), b.expiresAt(), ip(req));
   }
+  @GetMapping("/announcements") public List<AnnouncementDto> announcements(Authentication a){
+    return admin.listAnnouncements(admin(a));
+  }
+  public record AnnouncementUpdate(String title, String body, java.time.LocalDateTime expiresAt, Boolean active) {}
+  @PutMapping("/announcements/{id}") public AnnouncementDto updateAnnouncement(Authentication a, @PathVariable Long id, @RequestBody AnnouncementUpdate b, HttpServletRequest req){
+    return admin.updateAnnouncement(admin(a), id, b.title(), b.body(), b.expiresAt(), b.active(), ip(req));
+  }
+  @DeleteMapping("/announcements/{id}") public Map<String,String> deleteAnnouncement(Authentication a, @PathVariable Long id, HttpServletRequest req){
+    admin.deleteAnnouncement(admin(a), id, ip(req)); return Map.of("status","deleted");
+  }
+  /** Event moderation list (FR-ADM-07): events in the caller's scope. */
+  @GetMapping("/events") public List<com.unilink.community.FeedService.PostDto> events(Authentication a){
+    return admin.listEventsForModeration(admin(a));
+  }
+  public record EventModerateBody(String status, java.time.LocalDateTime deadline, String visibility, Boolean registrationClosed) {}
+  @PatchMapping("/events/{id}") public com.unilink.community.FeedService.PostDto moderateEvent(Authentication a, @PathVariable Long id, @RequestBody EventModerateBody b, HttpServletRequest req){
+    return admin.moderateEvent(admin(a), id, b.status(), b.deadline(), b.visibility(), b.registrationClosed(), ip(req));
+  }
   @PostMapping("/master-data/universities") public UniversityDto createUniversity(Authentication a, @RequestBody MasterBody b, HttpServletRequest req){
     return admin.createUniversity(admin(a), b.name(), b.shortName(), b.emailDomains(), ip(req));
+  }
+  public record MasterUpdate(String name, String shortName, String emailDomains, String label, Integer startYear, Boolean active) {}
+  @PutMapping("/master-data/universities/{id}") public UniversityDto updateUniversity(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){
+    return admin.updateUniversity(admin(a), id, b.name(), b.shortName(), b.emailDomains(), b.active(), ip(req));
   }
   @PostMapping("/master-data/departments") public DepartmentDto createDepartment(Authentication a, @RequestBody MasterBody b, HttpServletRequest req){
     return admin.createDepartment(admin(a), b.universityId(), b.catalogId(), b.name(), ip(req));
   }
+  @PutMapping("/master-data/departments/{id}") public DepartmentDto updateDepartment(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){
+    return admin.updateDepartment(admin(a), id, b.name(), b.active(), ip(req));
+  }
   @PostMapping("/master-data/sectors") public SectorTagDto createSector(Authentication a, @RequestBody MasterBody b, HttpServletRequest req){
     return admin.createSector(admin(a), b.name(), ip(req));
+  }
+  @PutMapping("/master-data/sectors/{id}") public SectorTagDto updateSector(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){
+    return admin.updateSector(admin(a), id, b.name(), b.active(), ip(req));
+  }
+  public record BatchBody(Long universityId, Long departmentId, String label, Integer startYear) {}
+  @PostMapping("/master-data/batches") public BatchDto createBatch(Authentication a, @RequestBody BatchBody b, HttpServletRequest req){
+    return admin.createBatch(admin(a), b.universityId(), b.departmentId(), b.label(), b.startYear(), ip(req));
+  }
+  @PutMapping("/master-data/batches/{id}") public BatchDto updateBatch(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){
+    return admin.updateBatch(admin(a), id, b.label(), b.startYear(), b.active(), ip(req));
+  }
+  /** Deactivate, never hard-delete, a master-data row. */
+  @PostMapping("/master-data/{kind}/{id}/deactivate") public Map<String,String> deactivateMasterData(Authentication a, @PathVariable String kind, @PathVariable Long id, HttpServletRequest req){
+    admin.deactivateMasterData(admin(a), kind, id, ip(req)); return Map.of("status","deactivated");
+  }
+  @GetMapping("/moderators") public List<AdminAccountDto> moderators(Authentication a){
+    return admin.listModerators(admin(a));
+  }
+  public record ModeratorUpdate(String email, Long universityId, Boolean active) {}
+  @PutMapping("/moderators/{id}") public AdminAccountDto updateModerator(Authentication a, @PathVariable Long id, @RequestBody ModeratorUpdate b){
+    return admin.updateModerator(admin(a), id, b.email(), b.universityId(), b.active());
+  }
+  @PostMapping("/moderators/{id}/reset-credentials") public AdminService.ResetCredentialsResult resetModeratorCredentials(Authentication a, @PathVariable Long id, HttpServletRequest req){
+    return admin.resetModeratorCredentials(admin(a), id, ip(req));
   }
   @PostMapping("/moderators") public AdminAccountDto createModerator(Authentication a, @RequestBody ModeratorBody b, HttpServletRequest req){
     return admin.createModerator(admin(a), b.email(), b.universityId(), b.password(), ip(req));
@@ -91,6 +140,26 @@ public class AdminController {
   @GetMapping("/analytics") public Map<String,Object> analytics(Authentication a){ return admin.analytics(admin(a)); }
   @GetMapping("/audit-logs") public List<AuditLogDto> auditLogs(Authentication a, @RequestParam(defaultValue="50") int limit){
     return admin.auditLogs(admin(a), Math.min(limit, 200));
+  }
+  /** Audit export (FR-ADM-11): CSV of the same rows the list endpoint returns. */
+  @GetMapping(value="/audit-logs/export", produces="text/csv")
+  public ResponseEntity<String> auditExport(Authentication a, @RequestParam(defaultValue="200") int limit){
+    List<AuditLogDto> rows = admin.auditLogs(admin(a), Math.min(limit, 1000));
+    StringBuilder csv = new StringBuilder("id,createdAt,actorAdminId,action,targetType,targetId,reason,ip\n");
+    for (AuditLogDto r : rows){
+      csv.append(r.id()).append(",").append(r.createdAt()).append(",").append(r.actorAdminId()).append(",")
+        .append(csvCell(r.action())).append(",").append(csvCell(r.targetType())).append(",")
+        .append(r.targetId()==null?"":r.targetId()).append(",").append(csvCell(r.reason())).append(",")
+        .append(csvCell(r.ip())).append("\n");
+    }
+    return ResponseEntity.ok()
+      .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"audit-log.csv\"")
+      .body(csv.toString());
+  }
+  private static String csvCell(String v){
+    if (v==null) return "";
+    String s = v.replace("\"","\"\"");
+    return (s.contains(",") || s.contains("\"") || s.contains("\n")) ? "\""+s+"\"" : s;
   }
   @GetMapping("/alerts") public List<AdminAlertDto> alerts(Authentication a){
     return admin.adminAlerts(admin(a));

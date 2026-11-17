@@ -318,3 +318,39 @@ See `docs/phase-reports/01-addendum.md` for the full verification. D-072 to D-07
 ### D-080 Account-deletion endpoint shape (ADOPTED for v1.0)
 - SRS NFR-PRV-02 requires students to permanently delete their account data; D-052 defines anonymise-and-delete. Implemented as `POST /api/me/delete` with `{password}` (password re-authentication, CSRF-protected, student session required) in `AccountDeletionService.deleteOwnAccount`, because that is the path the Settings page already calls. The traceability table's earlier `DELETE /api/me` was a planning assumption, superseded by the frontend contract.
 - Semantics: the users row is hard-deleted in one transaction; all user-owned rows follow via `ON DELETE CASCADE` (credentials, OTPs, tokens, verification requests, profile data, posts, comments, reactions, bookmarks, follows, reports, notifications, teams); sent messages stay with `sender_id` set NULL and render as "Deleted user"; private storage objects (ID card, profile photo, incl. the latest verification request's keys) are deleted; all sessions are invalidated; the audit row keeps only the numeric id (written via `AuditService`, hash chain intact). The state machine's `* -> DELETED` is the terminal outcome; no row remains to carry the state, so a second call returns 404. Live verification pending the database permission.
+
+### D-081 OTP resend endpoint (ADOPTED for v1.0)
+- `POST /api/auth/otp/resend {userId}` added in Phase 2 (audit I-5 offered "add a resend endpoint or remove the resend button"). Caps: 60-second cooldown per user, max 5 resends/hour per user, max 10/hour per IP, reusing the `LoginThrottle` bucket pattern. Resend is rejected with 400 if the phone is already verified and 404 for an unknown user. Rationale: the backend could honestly support it (`OtpService.sendPhoneOtp` already existed), so removing the button would have hidden a working capability.
+
+### D-082 Phone format is strictly 01[3-9]xxxxxxxx (ADOPTED for v1.0)
+- Client zod regex and backend `@Pattern("^01[3-9]\\d{8}$")` on `RegisterForm.phone` accept only the 11-digit Bangladeshi mobile form. The `+880…` form is rejected with a clear message. Rationale: one canonical form keeps OTP delivery, duplicate-phone flagging (D-077) and login-throttle keys consistent; the form message tells the user the expected format.
+
+### D-083 Batch optional on sign-up (ADOPTED for v1.0)
+- `batchId` is nullable in the registration DTO, so the sign-up form leaves batch optional while university and department are required. Matches the backend contract as built.
+
+### D-084 Idle-timeout notice is warning-only (ADOPTED for v1.0)
+- The student app warns after 105 minutes idle (server session ends at 2 h) and the admin app after 25 minutes (server ends idle admin sessions at 30 min). The banner does not extend the server session; any activity dismisses it and restarts the timer.
+
+### D-085 Admin session restore counts only MFA-verified admins (ADOPTED for v1.0)
+- `GET /api/admin/auth/me` restore treats only MFA-verified admins as signed in; an admin who has logged in but not completed TOTP is routed to the TOTP step, not the dashboard.
+
+### D-086 Team join-request decide body is {accept: boolean} (ADOPTED for v1.0)
+- `POST /api/teams/requests/{id}/decide` takes `{accept: boolean}`, not the `{action, reason}` the audit's I-8 assumed. The backend contract governs; the frontend was changed to match it. Recorded because it corrects the audit text.
+
+### D-087 No public moderators endpoint (ADOPTED for v1.0)
+- Moderators are listed via `GET /api/admin/moderators` only. The audit's I-8 suggested `GET /api/public/*` for moderator reads; exposing admin accounts publicly would be wrong, so no public endpoint was added.
+
+### D-088 WARN action and event kind deferred (OPEN)
+- No `WARN` moderation action exists server-side, so the button was removed rather than wired to a fabricated action. No event kind/type field exists server-side, so the event form drops the type select (kind lives in title/body). Both need a schema/contract decision before they can be built.
+
+### D-089 GET /api/health is public (ADOPTED for v1.0)
+- Returns only `{status: "UP", service: "unilink-backend"}` — a liveness probe with no user data, same as `/actuator/health`. Added to the student chain's permitAll list (it previously 401'd because it sits under `/api/**`).
+
+### D-090 Unauthenticated student-auth calls return 401, not NPE/500 (ADOPTED for v1.0)
+- `/api/auth/**` is permitAll, so unauthenticated requests reached `AuthController` with a null `Authentication` and NPE'd (500) in `changePassword`, `me`, `deleteMe`, `status` and `resubmit` — the same class as the admin-TOTP NPE fixed earlier in Phase 2. `AuthController.requireStudentPrincipal` now throws 401 `Unauthorized` on a null authentication; a wrong principal type still yields 403 via `AccessPolicy.requireStudent`. Proven by `AuthController401Test` (5 tests). Note: `POST /api/me/delete` is not under permitAll, so its unauthenticated 401 comes from the filter chain (with a CSRF token); the controller guard is defence in depth there.
+
+### D-091 Spring-session cleanup ERROR in H2 tests is benign (ADOPTED)
+- `JdbcIndexedSessionRepository.cleanUpExpiredSessions` logs `BadSqlGrammarException: DELETE FROM SPRING_SESSION … Table not found` when an H2 test context lives past a minute boundary. Cause: H2 test databases have no SPRING_SESSION tables (Flyway disabled in tests, `ddl-auto=create-drop`); production gets the tables from V007. No production impact and no code fix; MockMvc tests that create a session set `spring.session.jdbc.initialize-schema=always` in their own test properties.
+
+### D-092 EducationEntry/Achievement year column quoted in the entity (ADOPTED for v1.0)
+- `year` is a reserved word in H2, so unquoted DDL/DML fails under H2; the entities now use `@Column(name="\"year\"")`. MySQL renders it backticked to the same column, and no migration was rewritten. This is a test-environment accommodation only, recorded so a future reader does not "simplify" it away.

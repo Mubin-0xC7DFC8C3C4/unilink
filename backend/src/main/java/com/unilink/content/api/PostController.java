@@ -2,15 +2,25 @@ package com.unilink.content.api;
 import com.unilink.common.PageResponse; import com.unilink.community.FeedService;
 import com.unilink.content.ContentDtos; import com.unilink.content.PostService;
 import com.unilink.security.AccessPolicy;
+import com.unilink.storage.StorageGateway;
+import com.unilink.team.TeamDtos; import com.unilink.team.TeamService;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.http.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import java.io.IOException;
 import java.time.LocalDateTime; import java.util.*;
 @RestController @RequestMapping("/api")
 public class PostController {
   private final PostService posts; private final AccessPolicy policy; private final JdbcTemplate jdbc;
-  public PostController(PostService p, AccessPolicy a, JdbcTemplate j){ posts=p; policy=a; jdbc=j; }
+  private final TeamService teams; private final StorageGateway storage;
+  public PostController(PostService p, AccessPolicy a, JdbcTemplate j, TeamService t, StorageGateway s){ posts=p; policy=a; jdbc=j; teams=t; storage=s; }
   public record CreatePost(String type, String visibility, String title, String body, List<Long> sectorIds) {}
   public record CreateEvent(String visibility, String title, String body, LocalDateTime deadline, String regLink, String location, List<Long> sectorIds) {}
+  public record UpdatePost(String title, String body, String visibility, List<Long> sectorIds) {}
+  public record UpdateEvent(String title, String body, LocalDateTime deadline, String regLink, String location, String visibility) {}
+  public record TeamRequestBody(String name, Integer maxSize) {}
   public record CommentBody(String body, List<Long> mentionUserIds) {}
   public record ReactionBody(String reaction) {}
   public record TargetBody(String targetType, Long targetId) {}
@@ -20,6 +30,31 @@ public class PostController {
   }
   @GetMapping("/posts/{id}") public FeedService.PostDto get(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); return posts.getPost(id, p);
+  }
+  /** Post edit/delete (FR-CNT-02): owner only, non-event posts. */
+  @PatchMapping("/posts/{id}") public FeedService.PostDto update(Authentication a, @PathVariable Long id, @RequestBody UpdatePost r){
+    var p = policy.requireStudent(a.getPrincipal());
+    return posts.updatePost(p, id, r.title(), r.body(), r.visibility(), r.sectorIds());
+  }
+  @DeleteMapping("/posts/{id}") public Map<String,String> delete(Authentication a, @PathVariable Long id){
+    var p = policy.requireStudent(a.getPrincipal()); posts.deletePost(p, id); return Map.of("status","deleted");
+  }
+  /** Post attachments (FR-CNT-03): one image/PDF per call, ≤10 MB. */
+  @PostMapping(value="/posts/{id}/attachments", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+  public ContentDtos.AttachmentDto addAttachment(Authentication a, @PathVariable Long id, @RequestParam("file") MultipartFile file) throws IOException {
+    var p = policy.requireStudent(a.getPrincipal());
+    return posts.addPostAttachment(p, id, file.getOriginalFilename(), file.getContentType(), file.getBytes());
+  }
+  @GetMapping("/posts/{id}/attachments") public List<ContentDtos.AttachmentDto> attachments(Authentication a, @PathVariable Long id){
+    var p = policy.requireStudent(a.getPrincipal()); return posts.listPostAttachments(p, id);
+  }
+  @GetMapping("/posts/{id}/attachments/{attachmentId}")
+  public ResponseEntity<InputStreamResource> downloadAttachment(Authentication a, @PathVariable Long id, @PathVariable Long attachmentId){
+    var p = policy.requireStudent(a.getPrincipal());
+    var f = posts.openPostAttachment(p, id, attachmentId);
+    return ResponseEntity.ok().contentType(MediaType.parseMediaType(f.contentType()))
+      .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\""+f.fileName().replace("\"","")+"\"")
+      .body(new InputStreamResource(storage.open(f.storageKey())));
   }
   @PostMapping("/posts/{id}/comments") public ContentDtos.CommentDto comment(Authentication a, @PathVariable Long id, @RequestBody CommentBody r){
     var p = policy.requireStudent(a.getPrincipal()); return posts.addComment(p, id, r.body(), r.mentionUserIds());
@@ -43,6 +78,34 @@ public class PostController {
   @PostMapping("/events") public FeedService.PostDto createEvent(Authentication a, @RequestBody CreateEvent r){
     var p = policy.requireStudent(a.getPrincipal());
     return posts.createEvent(p, r.visibility(), r.title(), r.body(), r.deadline(), r.regLink(), r.location(), r.sectorIds());
+  }
+  /** Event detail (FR-EVT-03). */
+  @GetMapping("/events/{id}") public FeedService.PostDto getEvent(Authentication a, @PathVariable Long id){
+    var p = policy.requireStudent(a.getPrincipal()); return posts.getEvent(id, p);
+  }
+  /** Upcoming events (FR-EVT-07) and the past-event archive (FR-EVT-05). */
+  @GetMapping("/events/upcoming") public List<FeedService.PostDto> upcomingEvents(Authentication a){
+    var p = policy.requireStudent(a.getPrincipal()); return posts.listEvents(p, false);
+  }
+  @GetMapping("/events") public List<FeedService.PostDto> listEvents(Authentication a, @RequestParam(defaultValue="false") boolean past){
+    var p = policy.requireStudent(a.getPrincipal()); return posts.listEvents(p, past);
+  }
+  /** Event edit/delete (FR-EVT-08): owner only. */
+  @PatchMapping("/events/{id}") public FeedService.PostDto updateEvent(Authentication a, @PathVariable Long id, @RequestBody UpdateEvent r){
+    var p = policy.requireStudent(a.getPrincipal());
+    return posts.updateEvent(p, id, r.title(), r.body(), r.deadline(), r.regLink(), r.location(), r.visibility());
+  }
+  @DeleteMapping("/events/{id}") public Map<String,String> deleteEvent(Authentication a, @PathVariable Long id){
+    var p = policy.requireStudent(a.getPrincipal()); posts.deleteEvent(p, id); return Map.of("status","deleted");
+  }
+  /** "Looking for Teammates" (FR-EVT-06 / FR-TEAM-01): creates the team for
+   *  this event; the caller becomes its creator and team-chat admin. */
+  @PostMapping("/events/{id}/team-request") public TeamDtos.TeamDto teamRequest(Authentication a, @PathVariable Long id,
+      @RequestBody(required=false) TeamRequestBody r){
+    var p = policy.requireStudent(a.getPrincipal());
+    String name = (r==null || r.name()==null || r.name().isBlank()) ? "Team for event " + id : r.name();
+    int maxSize = (r==null || r.maxSize()==null) ? 4 : r.maxSize();
+    return teams.createTeam(p, id, name, maxSize);
   }
   @PostMapping("/events/{id}/respond") public Map<String,String> respond(Authentication a, @PathVariable Long id, @RequestParam String response){
     var p = policy.requireStudent(a.getPrincipal()); posts.respondToEvent(p, id, response); return Map.of("status","ok");

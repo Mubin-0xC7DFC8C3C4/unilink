@@ -1,4 +1,5 @@
 package com.unilink.identity.api;
+import com.unilink.common.Exceptions;
 import com.unilink.identity.dto.AuthDtos.*;
 import com.unilink.identity.service.AccountDeletionService;
 import com.unilink.identity.service.AuthService;
@@ -30,6 +31,9 @@ public class AuthController {
   @ResponseStatus(HttpStatus.CREATED)
   public UserDto register(@Valid @ModelAttribute RegisterForm form){ return auth.register(form); }
   @PostMapping("/api/auth/verify-phone") public UserDto verifyPhone(@Valid @RequestBody OtpVerifyRequest r){ return auth.verifyPhone(r); }
+  @PostMapping("/api/auth/otp/resend") public Map<String,String> resendOtp(@Valid @RequestBody OtpResendRequest r, HttpServletRequest req){
+    return auth.resendPhoneOtp(r.userId(), req.getRemoteAddr());
+  }
   @GetMapping("/api/auth/verify-email") public UserDto verifyEmail(@RequestParam String token){ return auth.verifyEmailByToken(token); }
   @PostMapping("/api/auth/login") public UserDto login(@Valid @RequestBody LoginRequest r, HttpServletRequest req, HttpServletResponse res){
     Authentication a = auth.login(r.email(), r.password(), req.getRemoteAddr());
@@ -48,30 +52,37 @@ public class AuthController {
   @PostMapping("/api/auth/password-reset/confirm") public Map<String,String> resetConfirm(@Valid @RequestBody PasswordResetConfirm r){
     auth.confirmPasswordReset(r); return Map.of("status","Password changed. Please log in again.");
   }
+  // /api/auth/** is permitAll, so unauthenticated requests reach these methods
+  // with a null Authentication; dereferencing it NPE'd (500) instead of 401.
+  // Mirrors AdminAuthController.requireAdminPrincipal.
+  private Principals.UnilinkUserPrincipal requireStudentPrincipal(Authentication authn){
+    if (authn==null) throw new Exceptions.Unauthorized("Authentication required");
+    return policy.requireStudent(authn.getPrincipal());
+  }
   @PostMapping("/api/auth/change-password") public Map<String,String> changePassword(Authentication authn, @Valid @RequestBody ChangePasswordRequest r, HttpServletRequest req){
-    var p = policy.requireStudent(authn.getPrincipal());
+    var p = requireStudentPrincipal(authn);
     auth.changePassword(p.userId(), r);
     HttpSession s = req.getSession(false); if (s!=null) s.invalidate();
     return Map.of("status","Password changed. All sessions were invalidated; please log in again.");
   }
   @GetMapping("/api/auth/me") public UserDto me(Authentication authn){
-    var p = policy.requireStudent(authn.getPrincipal());
+    var p = requireStudentPrincipal(authn);
     return AuthService.toDto(auth.getUserOr404(p.userId()));
   }
   @PostMapping("/api/me/delete") public Map<String,Object> deleteMe(Authentication authn, @Valid @RequestBody DeleteAccountRequest r, HttpServletRequest req){
-    var p = policy.requireStudent(authn.getPrincipal());
+    var p = requireStudentPrincipal(authn);
     deletion.deleteOwnAccount(p.userId(), r.password(), req.getRemoteAddr());
     HttpSession s = req.getSession(false); if (s!=null) s.invalidate();
     SecurityContextHolder.clearContext();
     return Map.of("deleted", true);
   }
   @GetMapping("/api/auth/verification/status") public VerificationStatusDto status(Authentication authn){
-    var p = policy.requireStudent(authn.getPrincipal());
+    var p = requireStudentPrincipal(authn);
     return auth.verificationStatus(p.userId());
   }
   @PostMapping(value="/api/auth/verification/resubmit", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
   public UserDto resubmit(Authentication authn, @RequestPart(value="idCard", required=false) MultipartFile idCard){
-    var p = policy.requireStudent(authn.getPrincipal());
+    var p = requireStudentPrincipal(authn);
     return auth.resubmit(p.userId(), idCard);
   }
 }

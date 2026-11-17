@@ -9,7 +9,7 @@ import org.springframework.security.authentication.*; import org.springframework
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import java.io.IOException; import java.time.LocalDateTime;
+import java.io.IOException; import java.time.Duration; import java.time.LocalDateTime; import java.util.Map;
 @Service
 public class AuthService {
   private final UserRepository users; private final UserCredentialRepository creds;
@@ -86,6 +86,25 @@ public class AuthService {
     User u = getUserOr404(r.userId());
     otp.verifyPhoneOtp(u, r.otp());
     users.save(u); maybeMoveToPendingReview(u); return toDto(u);
+  }
+  /** OTP resend caps (FR-AUTH-04 / NFR-SEC-05): 60 s cooldown per user,
+   *  at most 5 resends per hour per user, at most 10 per hour per IP.
+   *  Reuses the LoginThrottle bucket pattern; no new table. */
+  private static final Duration OTP_RESEND_COOLDOWN = Duration.ofMinutes(1);
+  private static final Duration OTP_RESEND_WINDOW = Duration.ofHours(1);
+  @Transactional
+  public Map<String,String> resendPhoneOtp(Long userId, String ip){
+    User u = getUserOr404(userId);
+    if (u.getPhoneVerifiedAt()!=null) throw new Exceptions.BadRequest("PHONE_ALREADY_VERIFIED","Phone number is already verified");
+    String userKey = "otp-resend:"+userId; String ipKey = "otp-resend-ip:"+ip;
+    if (throttle.isLocked(userKey) || throttle.isLocked(ipKey))
+      throw new Exceptions.TooManyRequests("Too many OTP requests. Try again later.");
+    if (throttle.isCoolingDown(userKey, OTP_RESEND_COOLDOWN))
+      throw new Exceptions.TooManyRequests("Please wait a minute before requesting another OTP.");
+    if (!throttle.tryAcquire(userKey, 5, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW)
+        || !throttle.tryAcquire(ipKey, 10, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW))
+      throw new Exceptions.TooManyRequests("Too many OTP requests. Try again later.");
+    return Map.of("status","OTP resent","channel", otp.sendPhoneOtp(u));
   }
   @Transactional
   public UserDto verifyEmail(String token, Long userId){

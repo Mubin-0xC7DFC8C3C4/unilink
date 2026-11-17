@@ -101,7 +101,11 @@ public class SecurityConfig {
       .authenticationProvider(provider)
       .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED).sessionFixation(sf -> sf.migrateSession()))
       .authorizeHttpRequests(a -> a
-        .requestMatchers("/api/auth/**","/api/public/**","/api/csrf","/api/appeals/public").permitAll()
+        // GET /api/health is a liveness probe (returns only {status, service},
+        // no user data): public, like /actuator/health. It was previously
+        // authenticated-only because it sits under /api/** — an unauthenticated
+        // health check 401'd (audit-03 I-15 / inventory G-9).
+        .requestMatchers("/api/auth/**","/api/public/**","/api/csrf","/api/health","/api/appeals/public").permitAll()
         .requestMatchers("/actuator/health","/actuator/info").permitAll()
         .requestMatchers("/v3/api-docs/**","/swagger-ui/**","/swagger-ui.html").permitAll()
         .anyRequest().authenticated())

@@ -9,7 +9,9 @@ public class SearchService {
   public SearchService(JdbcTemplate jdbc){ this.jdbc=jdbc; }
   public record PostHit(Long id, String title, String body, String visibility) {}
   public record UserHit(Long id, String fullName, Long universityId, Long departmentId) {}
-  public List<PostHit> searchPosts(Principals.UnilinkUserPrincipal p, String q){
+  /** FR-SRC-02: filter posts by sector tag id (the `sector` param was
+   *  previously accepted by the controller and ignored). */
+  public List<PostHit> searchPosts(Principals.UnilinkUserPrincipal p, String q, Long sectorId){
     if (q==null || q.isBlank()) return List.of();
     String sql = """
       SELECT id, title, body, visibility FROM posts
@@ -18,9 +20,13 @@ public class SearchService {
         OR (scope_university_id=? AND visibility IN ('UNIVERSITY','DEPARTMENT'))
         OR (visibility='DEPARTMENT' AND scope_department_id=?)
         OR (visibility='DEPARTMENT_HUB' AND scope_catalog_id=?))
+      """ + (sectorId==null ? "" : "AND EXISTS (SELECT 1 FROM post_sector_tags pst WHERE pst.post_id=posts.id AND pst.sector_tag_id=?) ") + """
       ORDER BY created_at DESC LIMIT 50""";
+    Object[] args = sectorId==null
+      ? new Object[]{ q, p.universityId(), p.departmentId(), p.catalogId() }
+      : new Object[]{ q, p.universityId(), p.departmentId(), p.catalogId(), sectorId };
     return jdbc.query(sql, (rs,i)-> new PostHit(rs.getLong("id"), rs.getString("title"), rs.getString("body"), rs.getString("visibility")),
-      q, p.universityId(), p.departmentId(), p.catalogId());
+      args);
   }
   public List<UserHit> searchUsers(String q){
     if (q==null || q.isBlank()) return List.of();

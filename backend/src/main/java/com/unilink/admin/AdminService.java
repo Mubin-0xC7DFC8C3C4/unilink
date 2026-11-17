@@ -1,6 +1,7 @@
 package com.unilink.admin;
 import com.unilink.admin.AdminDtos.*;
 import com.unilink.audit.AuditService; import com.unilink.common.Exceptions;
+import com.unilink.community.FeedService;
 import com.unilink.identity.domain.*; import com.unilink.identity.dto.CatalogDtos.*;
 import com.unilink.identity.repo.*;
 import com.unilink.identity.service.SessionService;
@@ -21,18 +22,21 @@ public class AdminService {
   private final AdminAlertRepository alerts; private final JdbcTemplate jdbc; private final AuditService audit;
   private final AccessPolicy policy; private final PasswordEncoder encoder; private final SessionService sessions;
   private final UserCredentialRepository creds; private final VerificationAttemptRepository attempts;
+  private final EventDetailRepository eventDetails; private final FeedService feed;
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
       AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
       DepartmentCatalogRepository catalogs, BatchRepository batches, SectorTagRepository sectors,
       AppealRepository appeals, SuspensionRecommendationRepository recommendations, AdminAlertRepository alerts,
       JdbcTemplate jdbc, AuditService audit, AccessPolicy policy, PasswordEncoder encoder, SessionService sessions,
-      UserCredentialRepository creds, VerificationAttemptRepository attempts){
+      UserCredentialRepository creds, VerificationAttemptRepository attempts,
+      EventDetailRepository eventDetails, FeedService feed){
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
     this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
     this.appeals=appeals; this.recommendations=recommendations; this.alerts=alerts; this.jdbc=jdbc; this.audit=audit;
     this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds; this.attempts=attempts;
+    this.eventDetails=eventDetails; this.feed=feed;
   }
   /** Dashboard: real SQL counts only (FR-ADM-02). Moderators see their university only. */
   @Transactional(readOnly=true)
@@ -315,5 +319,177 @@ public class AdminService {
       }
     }
     return created;
+  }
+  // ---- moderators: list / edit / reset credentials (FR-ADM-12) ----
+  @Transactional(readOnly=true)
+  public List<AdminAccountDto> listModerators(Principals.AdminPrincipal admin){
+    if ("PLATFORM_ADMIN".equals(admin.role()))
+      return admins.findAll().stream().sorted(Comparator.comparing(AdminAccount::getEmail)).map(AdminAccountDto::from).toList();
+    return admins.findAll().stream()
+      .filter(a -> admin.universityId()!=null && admin.universityId().equals(a.getUniversityId()))
+      .sorted(Comparator.comparing(AdminAccount::getEmail)).map(AdminAccountDto::from).toList();
+  }
+  @Transactional
+  public AdminAccountDto updateModerator(Principals.AdminPrincipal admin, Long id, String email, Long universityId, Boolean active){
+    policy.requirePlatformAdmin(admin);
+    AdminAccount a = admins.findById(id).orElseThrow(() -> new Exceptions.NotFound("Admin"));
+    if (email!=null && !email.isBlank() && !email.equals(a.getEmail())){
+      if (admins.findByEmail(email).isPresent()) throw new Exceptions.Conflict("EMAIL_TAKEN","Admin email already exists");
+      a.setEmail(email);
+    }
+    if (universityId!=null) a.setUniversityId(universityId);
+    if (active!=null) a.setActive(active);
+    admins.save(a);
+    return AdminAccountDto.from(a);
+  }
+  public record ResetCredentialsResult(AdminAccountDto admin, String temporaryPassword) {}
+  /** Reset an admin's credentials (FR-ADM-12): the temporary password is
+   *  returned ONCE in this response (like the TOTP recovery codes) and never
+   *  stored or logged in plaintext. The admin must change it on next login. */
+  @Transactional
+  public ResetCredentialsResult resetModeratorCredentials(Principals.AdminPrincipal admin, Long id, String ip){
+    policy.requirePlatformAdmin(admin);
+    AdminAccount a = admins.findById(id).orElseThrow(() -> new Exceptions.NotFound("Admin"));
+    String tmp = UUID.randomUUID().toString().substring(0,12)+"A1";
+    a.setPasswordHash(encoder.encode(tmp)); a.setTotpEnrolled(false); admins.save(a);
+    sessions.invalidateAllSessions(a.getEmail());
+    audit.write(admin.adminId(), "ADMIN_CREDENTIALS_RESET", "ADMIN", id, null, Map.of(), ip);
+    return new ResetCredentialsResult(AdminAccountDto.from(a), tmp);
+  }
+  // ---- master data: updates + deactivate + batches (FR-ADM-10) ----
+  @Transactional
+  public UniversityDto updateUniversity(Principals.AdminPrincipal admin, Long id, String name, String shortName, String emailDomains, Boolean active, String ip){
+    policy.requirePlatformAdmin(admin);
+    University u = universities.findById(id).orElseThrow(() -> new Exceptions.NotFound("University"));
+    if (name!=null) u.setName(name);
+    if (shortName!=null) u.setShortName(shortName);
+    if (emailDomains!=null) u.setEmailDomains(emailDomains);
+    if (active!=null) u.setActive(active);
+    universities.save(u);
+    audit.write(admin.adminId(),"MASTERDATA_UPDATE","UNIVERSITY",id,null,Map.of(),ip);
+    return UniversityDto.from(u);
+  }
+  @Transactional
+  public DepartmentDto updateDepartment(Principals.AdminPrincipal admin, Long id, String name, Boolean active, String ip){
+    policy.requirePlatformAdmin(admin);
+    Department d = departments.findById(id).orElseThrow(() -> new Exceptions.NotFound("Department"));
+    if (name!=null) d.setName(name);
+    if (active!=null) d.setActive(active);
+    departments.save(d);
+    audit.write(admin.adminId(),"MASTERDATA_UPDATE","DEPARTMENT",id,null,Map.of(),ip);
+    return DepartmentDto.from(d);
+  }
+  @Transactional
+  public SectorTagDto updateSector(Principals.AdminPrincipal admin, Long id, String name, Boolean active, String ip){
+    policy.requirePlatformAdmin(admin);
+    SectorTag s = sectors.findById(id).orElseThrow(() -> new Exceptions.NotFound("Sector"));
+    if (name!=null) s.setName(name);
+    if (active!=null) s.setActive(active);
+    sectors.save(s);
+    audit.write(admin.adminId(),"MASTERDATA_UPDATE","SECTOR",id,null,Map.of(),ip);
+    return SectorTagDto.from(s);
+  }
+  @Transactional
+  public BatchDto createBatch(Principals.AdminPrincipal admin, Long universityId, Long departmentId, String label, Integer startYear, String ip){
+    policy.requirePlatformAdmin(admin);
+    if (label==null || label.isBlank()) throw new Exceptions.BadRequest("LABEL_REQUIRED","A batch needs a label");
+    Batch b = new Batch(); b.setUniversityId(universityId); b.setDepartmentId(departmentId);
+    b.setLabel(label); b.setStartYear(startYear); b.setActive(true);
+    b = batches.save(b);
+    audit.write(admin.adminId(),"MASTERDATA_CREATE","BATCH",b.getId(),null,Map.of(),ip);
+    return BatchDto.from(b);
+  }
+  @Transactional
+  public BatchDto updateBatch(Principals.AdminPrincipal admin, Long id, String label, Integer startYear, Boolean active, String ip){
+    policy.requirePlatformAdmin(admin);
+    Batch b = batches.findById(id).orElseThrow(() -> new Exceptions.NotFound("Batch"));
+    if (label!=null) b.setLabel(label);
+    if (startYear!=null) b.setStartYear(startYear);
+    if (active!=null) b.setActive(active);
+    batches.save(b);
+    audit.write(admin.adminId(),"MASTERDATA_UPDATE","BATCH",id,null,Map.of(),ip);
+    return BatchDto.from(b);
+  }
+  /** Deactivate, never hard-delete, referenced rows (FR-ADM-10). */
+  @Transactional
+  public void deactivateMasterData(Principals.AdminPrincipal admin, String kind, Long id, String ip){
+    policy.requirePlatformAdmin(admin);
+    switch (kind){
+      case "universities" -> { University u = universities.findById(id).orElseThrow(() -> new Exceptions.NotFound("University")); u.setActive(false); universities.save(u); }
+      case "departments" -> { Department d = departments.findById(id).orElseThrow(() -> new Exceptions.NotFound("Department")); d.setActive(false); departments.save(d); }
+      case "sectors" -> { SectorTag s = sectors.findById(id).orElseThrow(() -> new Exceptions.NotFound("Sector")); s.setActive(false); sectors.save(s); }
+      case "batches" -> { Batch b = batches.findById(id).orElseThrow(() -> new Exceptions.NotFound("Batch")); b.setActive(false); batches.save(b); }
+      default -> throw new Exceptions.BadRequest("INVALID_KIND","Unknown master-data kind");
+    }
+    audit.write(admin.adminId(),"MASTERDATA_DEACTIVATE",kind.toUpperCase(),id,null,Map.of(),ip);
+  }
+  // ---- announcements: list / update / delete (FR-ADM-09) ----
+  @Transactional(readOnly=true)
+  public List<AnnouncementDto> listAnnouncements(Principals.AdminPrincipal admin){
+    List<Announcement> all = announcements.findAll(org.springframework.data.domain.Sort.by(
+      org.springframework.data.domain.Sort.Direction.DESC,"createdAt"));
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(AnnouncementDto::from).toList();
+    return all.stream()
+      .filter(a -> "GLOBAL".equals(a.getScope()) || (a.getUniversityId()!=null && a.getUniversityId().equals(admin.universityId())))
+      .map(AnnouncementDto::from).toList();
+  }
+  @Transactional
+  public AnnouncementDto updateAnnouncement(Principals.AdminPrincipal admin, Long id, String title, String body,
+                                            LocalDateTime expiresAt, Boolean active, String ip){
+    Announcement a = announcements.findById(id).orElseThrow(() -> new Exceptions.NotFound("Announcement"));
+    if (!"PLATFORM_ADMIN".equals(admin.role())) policy.requireModeratorScopeOr404(admin, a.getUniversityId());
+    if (title!=null) a.setTitle(title);
+    if (body!=null) a.setBody(body);
+    if (expiresAt!=null) a.setExpiresAt(expiresAt);
+    if (active!=null) a.setActive(active);
+    announcements.save(a);
+    audit.write(admin.adminId(),"ANNOUNCEMENT_UPDATE","ANNOUNCEMENT",id,null,Map.of(),ip);
+    return AnnouncementDto.from(a);
+  }
+  /** Announcements are deactivated, never hard-deleted. */
+  @Transactional
+  public void deleteAnnouncement(Principals.AdminPrincipal admin, Long id, String ip){
+    Announcement a = announcements.findById(id).orElseThrow(() -> new Exceptions.NotFound("Announcement"));
+    if (!"PLATFORM_ADMIN".equals(admin.role())) policy.requireModeratorScopeOr404(admin, a.getUniversityId());
+    a.setActive(false); announcements.save(a);
+    audit.write(admin.adminId(),"ANNOUNCEMENT_DELETE","ANNOUNCEMENT",id,null,Map.of(),ip);
+  }
+  // ---- event moderation (FR-ADM-07) ----
+  @Transactional(readOnly=true)
+  public List<FeedService.PostDto> listEventsForModeration(Principals.AdminPrincipal admin){
+    List<Post> all = posts.findAll(org.springframework.data.domain.Sort.by(
+      org.springframework.data.domain.Sort.Direction.DESC,"createdAt")).stream()
+      .filter(p -> "EVENT".equals(p.getType())).toList();
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(feed::toDto).toList();
+    return all.stream().filter(p -> admin.universityId()!=null && admin.universityId().equals(p.getScopeUniversityId()))
+      .map(feed::toDto).toList();
+  }
+  /** Remove a fake event, close registration, or fix its deadline/visibility. */
+  @Transactional
+  public FeedService.PostDto moderateEvent(Principals.AdminPrincipal admin, Long postId, String status,
+                                           LocalDateTime deadline, String visibility, Boolean registrationClosed, String ip){
+    Post p = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+    if (!"EVENT".equals(p.getType())) throw new Exceptions.BadRequest("NOT_AN_EVENT","Post is not an event");
+    policy.requireModeratorScopeOr404(admin, p.getScopeUniversityId());
+    if (status!=null){
+      p.setStatus(switch (status){
+        case "REMOVE" -> "REMOVED"; case "RESTORE" -> "ACTIVE"; case "HIDE" -> "HIDDEN_ADMIN";
+        default -> throw new Exceptions.BadRequest("INVALID_ACTION","Unknown event action");
+      });
+    }
+    if (visibility!=null){
+      if (!List.of("DEPARTMENT","UNIVERSITY","DEPARTMENT_HUB","NATIONAL").contains(visibility))
+        throw new Exceptions.BadRequest("INVALID_VISIBILITY","Unknown visibility");
+      p.setVisibility(visibility);
+    }
+    posts.save(p);
+    if (deadline!=null || registrationClosed!=null){
+      EventDetail ev = eventDetails.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+      if (deadline!=null) ev.setDeadline(deadline);
+      if (registrationClosed!=null) ev.setRegistrationClosed(registrationClosed);
+      eventDetails.save(ev);
+    }
+    audit.write(admin.adminId(),"EVENT_MODERATE","EVENT",postId,null,Map.of(),ip);
+    return feed.toDto(p);
   }
 }

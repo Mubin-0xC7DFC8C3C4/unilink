@@ -8,4 +8,5 @@ import java.time.LocalDateTime;
 
 public interface MessageAttachmentRepository extends JpaRepository<MessageAttachment, Long> {
   List<MessageAttachment> findByMessageId(Long messageId);
+  List<MessageAttachment> findByMessageIdIn(List<Long> messageIds);
 }

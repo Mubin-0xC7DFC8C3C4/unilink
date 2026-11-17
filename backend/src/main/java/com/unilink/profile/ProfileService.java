@@ -1,25 +1,40 @@
 package com.unilink.profile;
-import com.unilink.common.Exceptions; import com.unilink.identity.domain.*;
+import com.unilink.common.Exceptions; import com.unilink.community.FeedService;
+import com.unilink.identity.domain.*;
 import com.unilink.identity.repo.*; import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
+import java.io.IOException;
 import java.util.*;
 @Service
 public class ProfileService {
   public record ProfileDto(Long userId, String fullName, String email, String phone, Long universityId, Long departmentId,
                            Long batchId, String studentId, String state, String bio, String headline, String links,
-                           List<String> skills, List<String> sectors, long followers, long following, boolean isOwner) {}
+                           List<String> skills, List<String> sectors, long followers, long following, boolean isOwner,
+                           String universityName, String departmentName, String batchLabel) {}
+  public record PhotoFile(byte[] bytes, String contentType) {}
   private final UserRepository users; private final ProfileRepository profiles; private final ProjectRepository projects;
   private final EducationEntryRepository education; private final AchievementRepository achievements;
   private final UserSkillRepository userSkills; private final SkillRepository skills; private final FollowRepository follows;
   private final UserSectorFollowRepository sectorFollows; private final SectorTagRepository sectors;
   private final IdentityChangeRequestRepository changeRequests; private final AccessPolicy policy;
+  private final PostRepository posts; private final FeedService feed;
+  private final UniversityRepository universities; private final DepartmentRepository departments; private final BatchRepository batches;
+  private final StorageGateway storage; private final UploadValidator uploads;
   public ProfileService(UserRepository users, ProfileRepository profiles, ProjectRepository projects,
       EducationEntryRepository education, AchievementRepository achievements, UserSkillRepository userSkills,
       SkillRepository skills, FollowRepository follows, UserSectorFollowRepository sectorFollows,
-      SectorTagRepository sectors, IdentityChangeRequestRepository changeRequests, AccessPolicy policy){
+      SectorTagRepository sectors, IdentityChangeRequestRepository changeRequests, AccessPolicy policy,
+      PostRepository posts, FeedService feed,
+      UniversityRepository universities, DepartmentRepository departments, BatchRepository batches,
+      StorageGateway storage, UploadValidator uploads){
     this.users=users; this.profiles=profiles; this.projects=projects; this.education=education; this.achievements=achievements;
     this.userSkills=userSkills; this.skills=skills; this.follows=follows; this.sectorFollows=sectorFollows;
     this.sectors=sectors; this.changeRequests=changeRequests; this.policy=policy;
+    this.posts=posts; this.feed=feed;
+    this.universities=universities; this.departments=departments; this.batches=batches;
+    this.storage=storage; this.uploads=uploads;
   }
   @Transactional(readOnly=true)
   public ProfileDto getProfile(Long targetUserId, Principals.UnilinkUserPrincipal viewer){
@@ -35,7 +50,10 @@ public class ProfileService {
     return new ProfileDto(u.getId(), u.getFullName(), u.getEmail(), phone, u.getUniversityId(), u.getDepartmentId(),
       u.getBatchId(), u.getStudentId(), u.getState(), p==null?null:p.getBio(), p==null?null:p.getHeadline(),
       p==null?null:p.getLinks(), skillNames, sectorNames,
-      follows.countByFollowedId(targetUserId), follows.countByFollowerId(targetUserId), owner);
+      follows.countByFollowedId(targetUserId), follows.countByFollowerId(targetUserId), owner,
+      u.getUniversityId()==null?null:universities.findById(u.getUniversityId()).map(University::getName).orElse(null),
+      u.getDepartmentId()==null?null:departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null),
+      u.getBatchId()==null?null:batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null));
   }
   @Transactional
   public ProfileDto updateOwn(Long userId, String bio, String headline, String links, Boolean phoneVisible){
@@ -79,11 +97,110 @@ public class ProfileService {
     }
   }
   @Transactional public void unfollow(Long followerId, Long followedId){ follows.deleteByFollowerIdAndFollowedId(followerId, followedId); }
+  @Transactional public void unfollowSector(Long userId, Long sectorId){ sectorFollows.deleteByUserIdAndSectorTagId(userId, sectorId); }
   @Transactional public IdentityChangeRequest requestIdentityChange(Long userId, Long newUniversityId, Long newDepartmentId, String newStudentId){
     // D-017: user stays Verified with old values until a reviewer approves.
     IdentityChangeRequest r=new IdentityChangeRequest();
     r.setUserId(userId); r.setNewUniversityId(newUniversityId); r.setNewDepartmentId(newDepartmentId);
     r.setNewStudentId(newStudentId); r.setStatus("PENDING");
     return changeRequests.save(r);
+  }
+  // ---- portfolio lists + edit + delete (FR-PROF-03/04) ----
+  @Transactional(readOnly=true)
+  public List<ProfileDtos.ProjectDto> listProjects(Long userId){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    return projects.findByUserId(userId).stream().map(ProfileDtos.ProjectDto::from).toList();
+  }
+  @Transactional
+  public ProfileDtos.ProjectDto updateProject(Long userId, Long id, String title, String desc, String url){
+    if (url!=null && url.toLowerCase().contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)");
+    Project pr = projects.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Project"));
+    if (title!=null) pr.setTitle(title);
+    if (desc!=null) pr.setDescription(desc);
+    if (url!=null) pr.setUrl(url);
+    return ProfileDtos.ProjectDto.from(projects.save(pr));
+  }
+  @Transactional(readOnly=true)
+  public List<ProfileDtos.EducationEntryDto> listEducation(Long userId){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    return education.findByUserId(userId).stream().map(ProfileDtos.EducationEntryDto::from).toList();
+  }
+  @Transactional
+  public ProfileDtos.EducationEntryDto updateEducation(Long userId, Long id, String institution, String degree, Integer year){
+    EducationEntry e = education.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Education entry"));
+    if (institution!=null) e.setInstitution(institution);
+    if (degree!=null) e.setDegree(degree);
+    if (year!=null) e.setYear(year);
+    return ProfileDtos.EducationEntryDto.from(education.save(e));
+  }
+  @Transactional
+  public void deleteEducation(Long userId, Long id){
+    EducationEntry e = education.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Education entry"));
+    education.delete(e);
+  }
+  @Transactional(readOnly=true)
+  public List<ProfileDtos.AchievementDto> listAchievements(Long userId){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    return achievements.findByUserId(userId).stream().map(ProfileDtos.AchievementDto::from).toList();
+  }
+  @Transactional
+  public ProfileDtos.AchievementDto updateAchievement(Long userId, Long id, String title, String desc, Integer year){
+    Achievement a = achievements.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Achievement"));
+    if (title!=null) a.setTitle(title);
+    if (desc!=null) a.setDescription(desc);
+    if (year!=null) a.setYear(year);
+    return ProfileDtos.AchievementDto.from(achievements.save(a));
+  }
+  @Transactional
+  public void deleteAchievement(Long userId, Long id){
+    Achievement a = achievements.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Achievement"));
+    achievements.delete(a);
+  }
+  // ---- activity feed (FR-PROF-07): the user's own public posts, newest first ----
+  @Transactional(readOnly=true)
+  public List<FeedService.PostDto> activity(Long userId){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    return posts.findByAuthorIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 20)).stream()
+      .filter(p -> "ACTIVE".equals(p.getStatus())).map(feed::toDto).toList();
+  }
+  // ---- profile photo / cover upload (FR-PROF-01): image ≤2 MB; the previous
+  //  stored object is deleted so stale files do not accumulate. ----
+  @Transactional
+  public void uploadPhoto(Long userId, String fileName, String contentType, byte[] bytes){
+    if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
+    String sniffed = uploads.sniffContentType(bytes, contentType);
+    uploads.validateImage(bytes, UploadValidator.PHOTO_MAX, contentType);
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    String key = storage.store("profile-photos", fileName, sniffed, bytes);
+    if (u.getProfilePhotoKey()!=null) storage.delete(u.getProfilePhotoKey());
+    u.setProfilePhotoKey(key); users.save(u);
+  }
+  @Transactional
+  public void uploadCover(Long userId, String fileName, String contentType, byte[] bytes){
+    if (bytes==null || bytes.length==0) throw new Exceptions.BadRequest("INVALID_FILE","File is empty or unreadable");
+    String sniffed = uploads.sniffContentType(bytes, contentType);
+    uploads.validateImage(bytes, UploadValidator.PHOTO_MAX, contentType);
+    Profile p = profiles.findById(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
+    String key = storage.store("profile-covers", fileName, sniffed, bytes);
+    if (p.getCoverKey()!=null) storage.delete(p.getCoverKey());
+    p.setCoverKey(key); profiles.save(p);
+  }
+  @Transactional(readOnly=true)
+  public PhotoFile openPhoto(Long userId){
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    if (u.getProfilePhotoKey()==null || !storage.exists(u.getProfilePhotoKey())) throw new Exceptions.NotFound("Photo");
+    return readImage(u.getProfilePhotoKey());
+  }
+  @Transactional(readOnly=true)
+  public PhotoFile openCover(Long userId){
+    Profile p = profiles.findById(userId).orElseThrow(() -> new Exceptions.NotFound("Photo"));
+    if (p.getCoverKey()==null || !storage.exists(p.getCoverKey())) throw new Exceptions.NotFound("Photo");
+    return readImage(p.getCoverKey());
+  }
+  private PhotoFile readImage(String key){
+    try {
+      byte[] bytes = storage.open(key).readAllBytes();
+      return new PhotoFile(bytes, uploads.sniffContentType(bytes, null));
+    } catch (IOException e){ throw new IllegalStateException("Storage unavailable", e); }
   }
 }

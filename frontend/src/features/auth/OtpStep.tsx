@@ -1,11 +1,23 @@
-import { useState } from 'react'; import { useMutation } from '@tanstack/react-query'; import { useNavigate, Link } from 'react-router-dom';
+import { useEffect, useState } from 'react'; import { useMutation } from '@tanstack/react-query'; import { useNavigate, Link } from 'react-router-dom';
 import { apiPost, errorMessage } from '../../api/client'; import { Button, Field, Input, PageHeader } from '../../design/primitives';
-export default function OtpStep(){ const [code,setCode]=useState(''); const [phone,setPhone]=useState(''); const nav=useNavigate();
-  const send = useMutation({ mutationFn: ()=>apiPost('/auth/otp/send',{phone}) });
-  const verify = useMutation({ mutationFn: ()=>apiPost('/auth/otp/verify',{phone, code}), onSuccess: ()=>nav('/pending') });
-  return <div className="container" style={{maxWidth:560}}><PageHeader eyebrow="Verification · OTP" title="Enter your OTP" lead="The OTP is sent to your phone or email, expires in 5 minutes, and allows at most 5 attempts (FR-AUTH-04)." />
-  <form onSubmit={e=>{e.preventDefault(); verify.mutate();}}><Field label="Phone or email used at sign-up" htmlFor="phone"><Input id="phone" value={phone} onChange={e=>setPhone(e.target.value)} /></Field>
-  <Field label="6-digit OTP" htmlFor="otp"><Input id="otp" inputMode="numeric" value={code} onChange={e=>setCode(e.target.value)} /></Field>
-  {verify.isError && <p role="alert" className="field-error">{errorMessage(verify.error)}</p>}
-  <div style={{display:'flex',gap:8}}><Button type="button" onClick={()=>send.mutate()} disabled={!phone||send.isPending}>Send OTP</Button><Button type="submit" variant="primary" disabled={verify.isPending}>Verify OTP</Button></div></form>
+/** FR-AUTH-04: verify the phone OTP the registration step sent.
+ *  Backend contract is POST /api/auth/verify-phone {userId, otp}; the user id
+ *  comes from the registration response (stored in session storage, never
+ *  typed in by hand). Resend is POST /api/auth/otp/resend {userId} with a
+ *  60-second cooldown and per-user/per-IP caps enforced server-side. */
+const OTP_USER_KEY = 'unilink:otpUserId';
+export default function OtpStep(){ const [code,setCode]=useState(''); const [cooldown,setCooldown]=useState(0); const nav=useNavigate();
+  const [userId] = useState<number|undefined>(()=>{ const v = sessionStorage.getItem(OTP_USER_KEY); return v===null ? undefined : Number(v); });
+  useEffect(()=>{ if(cooldown<=0) return; const t=setTimeout(()=>setCooldown(c=>c-1),1000); return ()=>clearTimeout(t); },[cooldown]);
+  const resend = useMutation({ mutationFn: ()=>apiPost<{status?:string; channel?:string}>('/auth/otp/resend',{userId}), onSuccess: ()=>setCooldown(60) });
+  const verify = useMutation({ mutationFn: ()=>apiPost('/auth/verify-phone',{userId, otp: code}), onSuccess: ()=>{ sessionStorage.removeItem(OTP_USER_KEY); nav('/pending'); } });
+  return <div className="container" style={{maxWidth:560}}><PageHeader eyebrow="Verification · OTP" title="Enter your OTP" lead="The OTP was sent to your phone (or email if SMS failed) when you signed up. It expires in 5 minutes and allows at most 5 attempts (FR-AUTH-04)." />
+  {userId===undefined
+    ? <p role="alert">We could not find your new account — the sign-up step may not have finished. Please <Link to="/signup">sign up again</Link>.</p>
+    : <form onSubmit={e=>{e.preventDefault(); verify.mutate();}}>
+    <Field label="6-digit OTP" htmlFor="otp"><Input id="otp" inputMode="numeric" value={code} onChange={e=>setCode(e.target.value)} /></Field>
+    {verify.isError && <p role="alert" className="field-error">{errorMessage(verify.error)}</p>}
+    {resend.isError && <p role="alert" className="field-error">{errorMessage(resend.error)}</p>}
+    {resend.isSuccess && <p role="status">A new OTP was sent{resend.data?.channel ? ` by ${resend.data.channel}` : ''}.</p>}
+    <div style={{display:'flex',gap:8}}><Button type="button" onClick={()=>resend.mutate()} disabled={resend.isPending || cooldown>0}>{cooldown>0 ? `Resend OTP (${cooldown}s)` : 'Resend OTP'}</Button><Button type="submit" variant="primary" disabled={verify.isPending}>Verify OTP</Button></div></form>}
   <p className="secondary" style={{marginTop:16}}>Also check your email for the verification link: <Link to="/verify-email">Verify email</Link>.</p></div>; }

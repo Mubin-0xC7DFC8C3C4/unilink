@@ -8,4 +8,5 @@ import java.time.LocalDateTime;
 
 public interface PostSectorTagRepository extends JpaRepository<PostSectorTag, Long> {
   List<PostSectorTag> findByPostId(Long postId);
+  void deleteByPostId(Long postId);
 }

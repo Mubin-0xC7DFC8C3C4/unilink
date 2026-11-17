@@ -7,7 +7,10 @@ public final class AuthDtos {
   /** FR-AUTH-01 (full SRS text): full name, phone, email, university, department, batch, address,
    *  student ID, ID card image AND profile photo. */
   public static class RegisterForm {
-    @NotBlank private String fullName; @NotBlank private String phone;
+    @NotBlank private String fullName;
+    /** Bangladeshi mobile: 11 digits, 01[3-9]xxxxxxxx (FR-AUTH-02; +880 form is not accepted). */
+    @NotBlank @Pattern(regexp="^01[3-9]\\d{8}$", message="Phone must be a Bangladeshi mobile number, e.g. 01712345678")
+    private String phone;
     @NotBlank @Email private String email;
     @NotNull private Long universityId; @NotNull private Long departmentId; private Long batchId;
     @NotBlank private String address; @NotBlank private String studentId;
@@ -26,6 +29,8 @@ public final class AuthDtos {
   }
   public record LoginRequest(@NotBlank @Email String email, @NotBlank String password) {}
   public record OtpVerifyRequest(@NotNull Long userId, @NotBlank String otp) {}
+  /** OTP resend (FR-AUTH-04): the user is identified by id, as in OtpVerifyRequest. */
+  public record OtpResendRequest(@NotNull Long userId) {}
   public record EmailResendRequest(@NotNull Long userId) {}
   public record PasswordResetRequest(@NotBlank @Email String email) {}
   public record PasswordResetConfirm(@NotBlank @Email String email, @NotBlank String otp, @NotBlank String newPassword) {}

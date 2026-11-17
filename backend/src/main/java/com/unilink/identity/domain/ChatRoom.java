@@ -11,6 +11,7 @@ public class ChatRoom {
   @Column(name="university_id") private Long universityId;
   @Column(name="team_id") private Long teamId;
   @Column(name="created_by") private Long createdBy;
+  @Column(name="closed_at") private LocalDateTime closedAt; // TEMP rooms only (FR-MSG-08); null = open
   @Column(name="created_at") private LocalDateTime createdAt;
   @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
 }
