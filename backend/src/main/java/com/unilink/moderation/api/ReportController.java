@@ -1,5 +1,5 @@
 package com.unilink.moderation.api;
-import com.unilink.identity.domain.*; import com.unilink.moderation.ModerationService;
+import com.unilink.moderation.ModerationDtos; import com.unilink.moderation.ModerationService;
 import com.unilink.security.AccessPolicy;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
 import java.util.Map;
@@ -9,11 +9,11 @@ public class ReportController {
   public ReportController(ModerationService m, AccessPolicy p){ mod=m; policy=p; }
   public record ReportBody(String targetType, Long targetId, String reason) {}
   public record AppealBody(String targetType, Long targetId, String reason) {}
-  @PostMapping("/reports") public Report report(Authentication a, @RequestBody ReportBody r){
+  @PostMapping("/reports") public ModerationDtos.ReportDto report(Authentication a, @RequestBody ReportBody r){
     var p = policy.requireStudent(a.getPrincipal());
     return mod.report(p, r.targetType(), r.targetId(), r.reason());
   }
-  @PostMapping("/appeals") public Appeal appeal(Authentication a, @RequestBody AppealBody r){
+  @PostMapping("/appeals") public ModerationDtos.AppealDto appeal(Authentication a, @RequestBody AppealBody r){
     var p = policy.requireStudent(a.getPrincipal());
     return mod.appeal(p, r.targetType(), r.targetId(), r.reason());
   }

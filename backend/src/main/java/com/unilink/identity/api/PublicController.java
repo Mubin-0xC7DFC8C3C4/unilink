@@ -1,23 +1,20 @@
 package com.unilink.identity.api;
-import com.unilink.identity.domain.*; import com.unilink.identity.repo.*;
+import com.unilink.identity.dto.CatalogDtos.*;
+import com.unilink.identity.service.PublicCatalogService;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
-/** Public master data for the sign-up form and filters (FR-ADM-10 data, read-only). */
+/** Public master data for the sign-up form and filters (FR-ADM-10 data, read-only).
+ *  Thin controller (ARCH): all reads go through the service and return DTOs. */
 @RestController @RequestMapping("/api/public")
 public class PublicController {
-  private final UniversityRepository universities; private final DepartmentRepository departments;
-  private final BatchRepository batches; private final SectorTagRepository sectors; private final SkillRepository skills;
-  private final DepartmentCatalogRepository catalogs;
-  public PublicController(UniversityRepository u, DepartmentRepository d, BatchRepository b, SectorTagRepository s, SkillRepository k, DepartmentCatalogRepository c){
-    universities=u; departments=d; batches=b; sectors=s; skills=k; catalogs=c;
+  private final PublicCatalogService catalog;
+  public PublicController(PublicCatalogService catalog){ this.catalog=catalog; }
+  @GetMapping("/universities") public List<UniversityDto> universities(){ return catalog.universities(); }
+  @GetMapping("/departments") public List<DepartmentDto> departments(@RequestParam Long universityId){ return catalog.departments(universityId); }
+  @GetMapping("/department-catalog") public List<DepartmentCatalogDto> catalog(){ return catalog.catalog(); }
+  @GetMapping("/batches") public List<BatchDto> batches(@RequestParam Long universityId, @RequestParam(required=false) Long departmentId){
+    return catalog.batches(universityId, departmentId);
   }
-  @GetMapping("/universities") public List<University> universities(){ return universities.findByActiveTrue(); }
-  @GetMapping("/departments") public List<Department> departments(@RequestParam Long universityId){ return departments.findByUniversityIdAndActiveTrue(universityId); }
-  @GetMapping("/department-catalog") public List<DepartmentCatalog> catalog(){ return catalogs.findByActiveTrue(); }
-  @GetMapping("/batches") public List<Batch> batches(@RequestParam Long universityId, @RequestParam(required=false) Long departmentId){
-    return departmentId==null ? batches.findAll().stream().filter(b->b.getUniversityId().equals(universityId)).toList()
-      : batches.findByUniversityIdAndDepartmentIdAndActiveTrue(universityId, departmentId);
-  }
-  @GetMapping("/sectors") public List<SectorTag> sectors(){ return sectors.findByActiveTrue(); }
-  @GetMapping("/skills") public List<Skill> skills(){ return skills.findByActiveTrue(); }
+  @GetMapping("/sectors") public List<SectorTagDto> sectors(){ return catalog.sectors(); }
+  @GetMapping("/skills") public List<SkillDto> skills(){ return catalog.skills(); }
 }

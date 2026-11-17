@@ -1,6 +1,6 @@
 package com.unilink.content.api;
 import com.unilink.common.PageResponse; import com.unilink.community.FeedService;
-import com.unilink.content.PostService; import com.unilink.identity.domain.*;
+import com.unilink.content.ContentDtos; import com.unilink.content.PostService;
 import com.unilink.security.AccessPolicy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
@@ -21,10 +21,10 @@ public class PostController {
   @GetMapping("/posts/{id}") public FeedService.PostDto get(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); return posts.getPost(id, p);
   }
-  @PostMapping("/posts/{id}/comments") public Comment comment(Authentication a, @PathVariable Long id, @RequestBody CommentBody r){
+  @PostMapping("/posts/{id}/comments") public ContentDtos.CommentDto comment(Authentication a, @PathVariable Long id, @RequestBody CommentBody r){
     var p = policy.requireStudent(a.getPrincipal()); return posts.addComment(p, id, r.body(), r.mentionUserIds());
   }
-  @GetMapping("/posts/{id}/comments") public List<Comment> comments(@PathVariable Long id){ return posts.listComments(id); }
+  @GetMapping("/posts/{id}/comments") public List<ContentDtos.CommentDto> comments(@PathVariable Long id){ return posts.listComments(id); }
   @PostMapping("/reactions") public Map<String,String> react(Authentication a, @RequestBody TargetBody t, @RequestParam(defaultValue="LIKE") String reaction){
     var p = policy.requireStudent(a.getPrincipal()); posts.react(p, t.targetType(), t.targetId(), reaction); return Map.of("status","ok");
   }
@@ -37,7 +37,7 @@ public class PostController {
   @DeleteMapping("/bookmarks") public Map<String,String> unbookmark(Authentication a, @RequestBody TargetBody t){
     var p = policy.requireStudent(a.getPrincipal()); posts.unbookmark(p, t.targetType(), t.targetId()); return Map.of("status","ok");
   }
-  @GetMapping("/bookmarks") public List<Bookmark> bookmarks(Authentication a){
+  @GetMapping("/bookmarks") public List<ContentDtos.BookmarkDto> bookmarks(Authentication a){
     var p = policy.requireStudent(a.getPrincipal()); return posts.listBookmarks(p.userId());
   }
   @PostMapping("/events") public FeedService.PostDto createEvent(Authentication a, @RequestBody CreateEvent r){

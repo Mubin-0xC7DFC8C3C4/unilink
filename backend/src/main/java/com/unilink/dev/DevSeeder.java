@@ -66,7 +66,7 @@ public class DevSeeder implements ApplicationRunner {
     u.setProfilePhotoKey("seed/placeholder-photo"); u.setIdCardKey("seed/placeholder-id");
     u = users.save(u);
     UserCredential c = new UserCredential(); c.setId(u.getId()); c.setPasswordHash(encoder.encode("Student123")); creds.save(c);
-    Profile p = new Profile(); p.setId(u.getId()); p.setPhoneVisible(false); profiles.save(p);
+    com.unilink.identity.domain.Profile p = new com.unilink.identity.domain.Profile(); p.setId(u.getId()); p.setPhoneVisible(false); profiles.save(p);
     VerificationRequest r = new VerificationRequest(); r.setUserId(u.getId());
     r.setStatus(verified?"APPROVED":"AWAITING_VERIFICATION"); r.setOcrStatus("DONE"); r.setOcrMatchScore(verified?0.95:0.0);
     r.setIdCardKey("seed/placeholder-id"); r.setProfilePhotoKey("seed/placeholder-photo");

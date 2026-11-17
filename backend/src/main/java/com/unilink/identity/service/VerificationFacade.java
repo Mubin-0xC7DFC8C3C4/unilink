@@ -1,4 +1,5 @@
 package com.unilink.identity.service;
+import com.unilink.admin.AdminDtos.VerificationRequestDto;
 import com.unilink.audit.AuditService; import com.unilink.common.Exceptions;
 import com.unilink.identity.domain.*; import com.unilink.identity.event.DomainEvents;
 import com.unilink.identity.repo.*; import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
@@ -19,7 +20,7 @@ public class VerificationFacade {
     this.policy=policy; this.events=events; this.sessions=sessions;
   }
   @Transactional
-  public VerificationRequest approve(Long requestId, Principals.AdminPrincipal admin, String ip){
+  public VerificationRequestDto approve(Long requestId, Principals.AdminPrincipal admin, String ip){
     VerificationRequest req = requests.findById(requestId).orElseThrow(() -> new Exceptions.NotFound("Verification request"));
     if (!"PENDING_REVIEW".equals(req.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","This request was already decided");
     User u = users.findById(req.getUserId()).orElseThrow(() -> new Exceptions.NotFound("User"));
@@ -32,10 +33,10 @@ public class VerificationFacade {
     att.setUserId(u.getId()); att.setVerificationRequestId(req.getId()); att.setOutcome("APPROVED"); attempts.save(att);
     audit.write(admin.adminId(), "VERIFICATION_APPROVE", "USER", u.getId(), null, Map.of("requestId", req.getId()), ip);
     events.publishEvent(new DomainEvents.StudentVerified(u.getId()));
-    return req;
+    return VerificationRequestDto.from(req);
   }
   @Transactional
-  public VerificationRequest reject(Long requestId, Principals.AdminPrincipal admin, String reason, String ip){
+  public VerificationRequestDto reject(Long requestId, Principals.AdminPrincipal admin, String reason, String ip){
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A rejection reason is mandatory (FR-ADM-03)");
     VerificationRequest req = requests.findById(requestId).orElseThrow(() -> new Exceptions.NotFound("Verification request"));
     if (!"PENDING_REVIEW".equals(req.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","This request was already decided");
@@ -49,6 +50,6 @@ public class VerificationFacade {
     att.setUserId(u.getId()); att.setVerificationRequestId(req.getId()); att.setOutcome("REJECTED"); att.setReason(reason); attempts.save(att);
     audit.write(admin.adminId(), "VERIFICATION_REJECT", "USER", u.getId(), reason, Map.of("requestId", req.getId()), ip);
     events.publishEvent(new DomainEvents.StudentRejected(u.getId(), reason));
-    return req;
+    return VerificationRequestDto.from(req);
   }
 }

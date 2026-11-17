@@ -1,8 +1,8 @@
 package com.unilink.messaging.api;
 import com.unilink.messaging.MessagingService;
 import com.unilink.security.AccessPolicy;
-import org.springframework.messaging.handler.annotation.*; import org.springframework.security.core.Authentication;
-import org.springframework.stereotype.Controller; import org.springframework.web.bind.annotation.*;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.*;
 import java.util.*;
 @RestController @RequestMapping("/api")
 public class MessagingRestController {
@@ -16,12 +16,10 @@ public class MessagingRestController {
     var p = policy.requireStudent(a.getPrincipal()); return svc.searchRooms(p, q);
   }
   @PostMapping("/rooms/department") public MessagingService.RoomDto deptRoom(Authentication a){
-    var p = policy.requireStudent(a.getPrincipal()); var r = svc.getOrCreateDepartmentRoom(p);
-    return new MessagingService.RoomDto(r.getId(), r.getPublicId(), r.getType(), r.getName(), List.of());
+    var p = policy.requireStudent(a.getPrincipal()); return svc.getOrCreateDepartmentRoom(p);
   }
   @PostMapping("/rooms/university") public MessagingService.RoomDto uniRoom(Authentication a){
-    var p = policy.requireStudent(a.getPrincipal()); var r = svc.getOrCreateUniversityRoom(p);
-    return new MessagingService.RoomDto(r.getId(), r.getPublicId(), r.getType(), r.getName(), List.of());
+    var p = policy.requireStudent(a.getPrincipal()); return svc.getOrCreateUniversityRoom(p);
   }
   @PostMapping("/rooms/private/{userId}") public MessagingService.RoomDto privateRoom(Authentication a, @PathVariable Long userId){
     var p = policy.requireStudent(a.getPrincipal()); return svc.createPrivateRoom(p, userId);
@@ -43,17 +41,5 @@ public class MessagingRestController {
   }
   @PostMapping("/rooms/{publicId}/mute") public Map<String,String> mute(Authentication a, @PathVariable String publicId, @RequestParam(defaultValue="60") int minutes){
     var p = policy.requireStudent(a.getPrincipal()); svc.mute(p.userId(), publicId, minutes); return Map.of("status","muted");
-  }
-}
-/** STOMP: /app/rooms.{publicId}.send — authenticated by the HTTP session, membership-checked in the service. */
-@Controller
-public class StompController {
-  private final MessagingService svc; private final AccessPolicy policy;
-  StompController(MessagingService s, AccessPolicy p){ svc=s; policy=p; }
-  public record StompSend(String body, String idempotencyKey) {}
-  @MessageMapping("/rooms.{publicId}.send")
-  public void send(@DestinationVariable String publicId, @Payload StompSend b, Authentication auth){
-    var p = policy.requireStudent(auth.getPrincipal());
-    svc.sendMessage(p, publicId, b.body(), b.idempotencyKey());
   }
 }

@@ -1,7 +1,10 @@
 package com.unilink.admin;
+import com.unilink.admin.AdminDtos.*;
 import com.unilink.audit.AuditService; import com.unilink.common.Exceptions;
-import com.unilink.identity.domain.*; import com.unilink.identity.repo.*;
+import com.unilink.identity.domain.*; import com.unilink.identity.dto.CatalogDtos.*;
+import com.unilink.identity.repo.*;
 import com.unilink.identity.service.SessionService;
+import com.unilink.moderation.ModerationDtos.*;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
 import org.springframework.jdbc.core.JdbcTemplate; import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
@@ -48,31 +51,42 @@ public class AdminService {
   private long count(String sql){ Long v = jdbc.queryForObject(sql, Long.class); return v==null?0:v; }
 
   @Transactional(readOnly=true)
-  public List<VerificationRequest> verificationQueue(Principals.AdminPrincipal admin){
+  public List<VerificationRequestDto> verificationQueue(Principals.AdminPrincipal admin){
     List<VerificationRequest> all = requests.findByStatusOrderBySubmittedAtAsc("PENDING_REVIEW");
-    if ("PLATFORM_ADMIN".equals(admin.role())) return all;
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(VerificationRequestDto::from).toList();
     Set<Long> mine = new HashSet<>();
     users.findByUniversityId(admin.universityId()).forEach(u -> mine.add(u.getId()));
-    return all.stream().filter(r -> mine.contains(r.getUserId())).toList();
+    return all.stream().filter(r -> mine.contains(r.getUserId())).map(VerificationRequestDto::from).toList();
   }
   @Transactional(readOnly=true)
-  public List<User> listUsers(Principals.AdminPrincipal admin, String q){
+  public List<AdminUserDto> listUsers(Principals.AdminPrincipal admin, String q){
     List<User> all = (q==null||q.isBlank()) ? users.findAll() :
       users.findAll().stream().filter(u -> u.getFullName().toLowerCase().contains(q.toLowerCase()) || u.getEmail().toLowerCase().contains(q.toLowerCase())).toList();
-    if ("PLATFORM_ADMIN".equals(admin.role())) return all;
-    return all.stream().filter(u -> admin.universityId().equals(u.getUniversityId())).toList();
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(AdminUserDto::from).toList();
+    return all.stream().filter(u -> admin.universityId().equals(u.getUniversityId())).map(AdminUserDto::from).toList();
   }
   @Transactional(readOnly=true)
-  public User getUser(Principals.AdminPrincipal admin, Long userId){
+  public AdminUserDto getUser(Principals.AdminPrincipal admin, Long userId){
+    return AdminUserDto.from(loadUser(admin, userId));
+  }
+  /** Entity loader for internal use (scope-checked); the API boundary returns AdminUserDto. */
+  private User loadUser(Principals.AdminPrincipal admin, Long userId){
     User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
     policy.requireModeratorScopeOr404(admin, u.getUniversityId());
     return u;
   }
+  /** ID image key for the authorised stream: loads the request and enforces moderator scope (404 out of scope). */
+  @Transactional(readOnly=true)
+  public String verificationIdCardKey(Principals.AdminPrincipal admin, Long requestId){
+    VerificationRequest r = requests.findById(requestId).orElseThrow(() -> new Exceptions.NotFound("Verification request"));
+    loadUser(admin, r.getUserId());
+    return r.getIdCardKey();
+  }
   /** Suspend/ban/reactivate/revoke/force-reset — reason mandatory, sessions revoked (FR-ADM-04). */
   @Transactional
-  public User changeUserState(Principals.AdminPrincipal admin, Long userId, String action, String reason, String ip){
+  public AdminUserDto changeUserState(Principals.AdminPrincipal admin, Long userId, String action, String reason, String ip){
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
-    User u = getUser(admin, userId);
+    User u = loadUser(admin, userId);
     String from = u.getState();
     switch (action){
       case "SUSPEND" -> { u.setState(com.unilink.identity.domain.AccountState.of(from).transitionTo(com.unilink.identity.domain.AccountState.SUSPENDED).name()); }
@@ -89,22 +103,22 @@ public class AdminService {
     users.save(u);
     sessions.invalidateAllSessions(u.getEmail());
     audit.write(admin.adminId(), "USER_"+action, "USER", userId, reason, Map.of("from", from), ip);
-    return u;
+    return AdminUserDto.from(u);
   }
   /** Moderator recommends suspension; only a Platform Admin confirms it (D-036). */
   @Transactional
-  public SuspensionRecommendation recommendSuspension(Principals.AdminPrincipal mod, Long userId, String reason, String ip){
+  public SuspensionRecommendationDto recommendSuspension(Principals.AdminPrincipal mod, Long userId, String reason, String ip){
     if ("PLATFORM_ADMIN".equals(mod.role())) throw new Exceptions.BadRequest("INVALID_ROLE","Platform Admins suspend directly");
-    User u = getUser(mod, userId);
+    User u = loadUser(mod, userId);
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
     SuspensionRecommendation r = new SuspensionRecommendation();
     r.setUserId(userId); r.setModeratorId(mod.adminId()); r.setReason(reason); r.setStatus("PENDING");
     r = recommendations.save(r);
     audit.write(mod.adminId(), "SUSPENSION_RECOMMEND", "USER", userId, reason, Map.of("recommendationId", r.getId()), ip);
-    return r;
+    return SuspensionRecommendationDto.from(r);
   }
   @Transactional
-  public SuspensionRecommendation decideRecommendation(Principals.AdminPrincipal admin, Long id, boolean confirm, String ip){
+  public SuspensionRecommendationDto decideRecommendation(Principals.AdminPrincipal admin, Long id, boolean confirm, String ip){
     policy.requirePlatformAdmin(admin);
     SuspensionRecommendation r = recommendations.findById(id).orElseThrow(() -> new Exceptions.NotFound("Recommendation"));
     if (!"PENDING".equals(r.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Recommendation already decided");
@@ -116,7 +130,23 @@ public class AdminService {
       users.save(u); sessions.invalidateAllSessions(u.getEmail());
     }
     audit.write(admin.adminId(), "SUSPENSION_RECOMMEND_"+r.getStatus(), "USER", r.getUserId(), r.getReason(), Map.of("recommendationId", r.getId()), ip);
-    return r;
+    return SuspensionRecommendationDto.from(r);
+  }
+  /** Suspension recommendations visible to the caller (ARCH: repository reads live in the service). */
+  @Transactional(readOnly=true)
+  public List<SuspensionRecommendationDto> listRecommendations(Principals.AdminPrincipal admin){
+    if ("PLATFORM_ADMIN".equals(admin.role())) return recommendations.findByStatusOrderByCreatedAtAsc("PENDING").stream().map(SuspensionRecommendationDto::from).toList();
+    return recommendations.findByModeratorIdOrderByCreatedAtDesc(admin.adminId()).stream().map(SuspensionRecommendationDto::from).toList();
+  }
+  /** Pending appeals (no university scoping, as before). */
+  @Transactional(readOnly=true)
+  public List<AppealDto> pendingAppeals(){
+    return appeals.findByStatusOrderByCreatedAtAsc("PENDING").stream().map(AppealDto::from).toList();
+  }
+  /** Overdue-verification alerts for the calling admin. */
+  @Transactional(readOnly=true)
+  public List<AdminAlertDto> adminAlerts(Principals.AdminPrincipal admin){
+    return alerts.findByAdminIdOrderByCreatedAtDesc(admin.adminId()).stream().map(AdminAlertDto::from).toList();
   }
   // ---- moderation decisions (ModerationFacade behaviour) ----
   @Transactional
@@ -141,7 +171,7 @@ public class AdminService {
     audit.write(admin.adminId(), "CONTENT_"+action, targetType, targetId, reason, Map.of(), ip);
   }
   @Transactional
-  public Appeal decideAppeal(Principals.AdminPrincipal admin, Long appealId, boolean accept, String reason, String ip){
+  public AppealDto decideAppeal(Principals.AdminPrincipal admin, Long appealId, boolean accept, String reason, String ip){
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
     Appeal a = appeals.findById(appealId).orElseThrow(() -> new Exceptions.NotFound("Appeal"));
     if (!"PENDING".equals(a.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Appeal already decided");
@@ -151,17 +181,17 @@ public class AdminService {
       posts.findById(a.getTargetId()).ifPresent(p -> { if (!"REMOVED".equals(p.getStatus())){ p.setStatus("ACTIVE"); posts.save(p); } });
     }
     audit.write(admin.adminId(), "APPEAL_"+(accept?"ACCEPT":"REJECT"), "APPEAL", appealId, reason, Map.of(), ip);
-    return a;
+    return AppealDto.from(a);
   }
   @Transactional(readOnly=true)
-  public List<Report> moderationQueue(Principals.AdminPrincipal admin){
+  public List<ReportDto> moderationQueue(Principals.AdminPrincipal admin){
     // Ordered by report count then age (FR-ADM-05): group by target, count desc, oldest first.
     List<Report> all = reports.findByStatusOrderByCreatedAtAsc("ACTIVE");
     Map<String,Long> counts = new HashMap<>();
     for (Report r : all) counts.merge(r.getTargetType()+":"+r.getTargetId(), 1L, Long::sum);
     all.sort(Comparator.comparingLong((Report r) -> counts.get(r.getTargetType()+":"+r.getTargetId())).reversed()
       .thenComparing(Report::getCreatedAt));
-    if ("PLATFORM_ADMIN".equals(admin.role())) return all;
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().map(ReportDto::from).toList();
     return all.stream().filter(r -> {
       Long uni = switch (r.getTargetType()){
         case "POST","EVENT" -> posts.findById(r.getTargetId()).map(Post::getScopeUniversityId).orElse(null);
@@ -170,44 +200,44 @@ public class AdminService {
         default -> null;
       };
       return admin.universityId().equals(uni);
-    }).toList();
+    }).map(ReportDto::from).toList();
   }
   // ---- announcements (D-039) ----
   @Transactional
-  public Announcement createAnnouncement(Principals.AdminPrincipal admin, String title, String body, String scope, Long universityId, LocalDateTime expiresAt, String ip){
+  public AnnouncementDto createAnnouncement(Principals.AdminPrincipal admin, String title, String body, String scope, Long universityId, LocalDateTime expiresAt, String ip){
     if ("UNIVERSITY".equals(scope) && !"PLATFORM_ADMIN".equals(admin.role())) policy.requireModeratorScopeOr404(admin, universityId);
     Announcement a = new Announcement(); a.setAdminId(admin.adminId()); a.setTitle(title); a.setBody(body);
     a.setScope(scope); a.setUniversityId("GLOBAL".equals(scope)?null:universityId); a.setExpiresAt(expiresAt); a.setActive(true);
     a = announcements.save(a);
     audit.write(admin.adminId(), "ANNOUNCEMENT_CREATE", "ANNOUNCEMENT", a.getId(), null, Map.of("scope", scope), ip);
-    return a;
+    return AnnouncementDto.from(a);
   }
   @Transactional(readOnly=true)
-  public List<Announcement> activeAnnouncements(Principals.UnilinkUserPrincipal p){
+  public List<AnnouncementDto> activeAnnouncements(Principals.UnilinkUserPrincipal p){
     return announcements.findByActiveTrueOrderByCreatedAtDesc().stream()
       .filter(a -> (a.getExpiresAt()==null || a.getExpiresAt().isAfter(LocalDateTime.now()))
         && ("GLOBAL".equals(a.getScope()) || (p.universityId()!=null && p.universityId().equals(a.getUniversityId()))))
-      .toList();
+      .map(AnnouncementDto::from).toList();
   }
   // ---- master data (FR-ADM-10): deactivate, never hard-delete referenced rows ----
-  @Transactional public University createUniversity(Principals.AdminPrincipal admin, String name, String shortName, String domains, String ip){
+  @Transactional public UniversityDto createUniversity(Principals.AdminPrincipal admin, String name, String shortName, String domains, String ip){
     policy.requirePlatformAdmin(admin);
     University u = new University(); u.setName(name); u.setShortName(shortName); u.setEmailDomains(domains); u.setActive(true);
-    u = universities.save(u); audit.write(admin.adminId(),"MASTERDATA_CREATE","UNIVERSITY",u.getId(),null,Map.of(),ip); return u;
+    u = universities.save(u); audit.write(admin.adminId(),"MASTERDATA_CREATE","UNIVERSITY",u.getId(),null,Map.of(),ip); return UniversityDto.from(u);
   }
-  @Transactional public Department createDepartment(Principals.AdminPrincipal admin, Long universityId, Long catalogId, String name, String ip){
+  @Transactional public DepartmentDto createDepartment(Principals.AdminPrincipal admin, Long universityId, Long catalogId, String name, String ip){
     policy.requirePlatformAdmin(admin);
     Department d = new Department(); d.setUniversityId(universityId); d.setCatalogId(catalogId); d.setName(name); d.setActive(true);
-    d = departments.save(d); audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT",d.getId(),null,Map.of(),ip); return d;
+    d = departments.save(d); audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT",d.getId(),null,Map.of(),ip); return DepartmentDto.from(d);
   }
-  @Transactional public SectorTag createSector(Principals.AdminPrincipal admin, String name, String ip){
+  @Transactional public SectorTagDto createSector(Principals.AdminPrincipal admin, String name, String ip){
     policy.requirePlatformAdmin(admin);
     SectorTag s = new SectorTag(); s.setName(name); s.setActive(true);
-    s = sectors.save(s); audit.write(admin.adminId(),"MASTERDATA_CREATE","SECTOR",s.getId(),null,Map.of(),ip); return s;
+    s = sectors.save(s); audit.write(admin.adminId(),"MASTERDATA_CREATE","SECTOR",s.getId(),null,Map.of(),ip); return SectorTagDto.from(s);
   }
   // ---- moderator management (FR-ADM-12) ----
   @Transactional
-  public AdminAccount createModerator(Principals.AdminPrincipal admin, String email, Long universityId, String password, String ip){
+  public AdminAccountDto createModerator(Principals.AdminPrincipal admin, String email, Long universityId, String password, String ip){
     policy.requirePlatformAdmin(admin);
     if (password==null || password.length()<12) throw new Exceptions.BadRequest("WEAK_PASSWORD","Admin passwords must be at least 12 characters (D-031)");
     if (admins.findByEmail(email).isPresent()) throw new Exceptions.Conflict("EMAIL_TAKEN","Admin email already exists");
@@ -215,7 +245,7 @@ public class AdminService {
     a.setRole("UNIVERSITY_MODERATOR"); a.setUniversityId(universityId); a.setActive(true); a.setTotpEnrolled(false);
     a = admins.save(a);
     audit.write(admin.adminId(), "MODERATOR_CREATE", "ADMIN", a.getId(), null, Map.of("universityId", universityId), ip);
-    return a;
+    return AdminAccountDto.from(a);
   }
   @Transactional
   public void deactivateAdmin(Principals.AdminPrincipal admin, Long adminId, String reason, String ip){
@@ -240,14 +270,14 @@ public class AdminService {
     return m;
   }
   @Transactional(readOnly=true)
-  public List<AuditLog> auditLogs(Principals.AdminPrincipal admin, int limit){
+  public List<AuditLogDto> auditLogs(Principals.AdminPrincipal admin, int limit){
     // Moderators see only their university's actions: audit rows carry no university, so moderators see
     // only rows whose target is a user of their university or their own actions. (Documented limitation.)
     List<AuditLog> all = auditLogs.findAll(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC,"id"));
-    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().limit(limit).toList();
+    if ("PLATFORM_ADMIN".equals(admin.role())) return all.stream().limit(limit).map(AuditLogDto::from).toList();
     return all.stream().filter(l -> admin.adminId().equals(l.getActorAdminId())
       || ("USER".equals(l.getTargetType()) && l.getTargetId()!=null && users.findById(l.getTargetId()).map(x->admin.universityId().equals(x.getUniversityId())).orElse(false)))
-      .limit(limit).toList();
+      .limit(limit).map(AuditLogDto::from).toList();
   }
   /** Overdue alerts job helper (D-038): one alert per overdue request, idempotent. */
   @Transactional

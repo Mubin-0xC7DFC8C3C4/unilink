@@ -46,18 +46,18 @@ public class ProfileService {
     profiles.save(p);
     return getProfile(userId, null);
   }
-  @Transactional public Project addProject(Long userId, String title, String desc, String url){
+  @Transactional public ProfileDtos.ProjectDto addProject(Long userId, String title, String desc, String url){
     if (url!=null && url.toLowerCase().contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)");
-    Project pr=new Project(); pr.setUserId(userId); pr.setTitle(title); pr.setDescription(desc); pr.setUrl(url); return projects.save(pr);
+    Project pr=new Project(); pr.setUserId(userId); pr.setTitle(title); pr.setDescription(desc); pr.setUrl(url); return ProfileDtos.ProjectDto.from(projects.save(pr));
   }
   @Transactional public void deleteProject(Long userId, Long id){
     Project pr = projects.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Project")); projects.delete(pr);
   }
-  @Transactional public EducationEntry addEducation(Long userId, String inst, String degree, Integer year){
-    EducationEntry e=new EducationEntry(); e.setUserId(userId); e.setInstitution(inst); e.setDegree(degree); e.setYear(year); return education.save(e);
+  @Transactional public ProfileDtos.EducationEntryDto addEducation(Long userId, String inst, String degree, Integer year){
+    EducationEntry e=new EducationEntry(); e.setUserId(userId); e.setInstitution(inst); e.setDegree(degree); e.setYear(year); return ProfileDtos.EducationEntryDto.from(education.save(e));
   }
-  @Transactional public Achievement addAchievement(Long userId, String title, String desc, Integer year){
-    Achievement a=new Achievement(); a.setUserId(userId); a.setTitle(title); a.setDescription(desc); a.setYear(year); return achievements.save(a);
+  @Transactional public ProfileDtos.AchievementDto addAchievement(Long userId, String title, String desc, Integer year){
+    Achievement a=new Achievement(); a.setUserId(userId); a.setTitle(title); a.setDescription(desc); a.setYear(year); return ProfileDtos.AchievementDto.from(achievements.save(a));
   }
   @Transactional public void addSkill(Long userId, String skillName){
     Skill s = skills.findByName(skillName).orElseGet(() -> { Skill ns=new Skill(); ns.setName(skillName); return skills.save(ns); });

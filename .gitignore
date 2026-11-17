@@ -6,3 +6,5 @@ frontend/dist/
 storage-dev/
 *.log
 .DS_Store
+frontend/tsconfig.tsbuildinfo
+__pycache__/

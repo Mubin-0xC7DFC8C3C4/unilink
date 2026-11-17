@@ -1,10 +1,11 @@
 package com.unilink.arch;
+import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition;
 import org.junit.jupiter.api.Test;
 /** ArchUnit layering (TEST_STRATEGY §2): controllers never touch repositories or entities directly. */
 class ArchitectureTest {
-  private final var classes = new ClassFileImporter().importPackages("com.unilink");
+  private final JavaClasses classes = new ClassFileImporter().importPackages("com.unilink");
   @Test void controllersDoNotAccessRepositories(){
     ArchRuleDefinition.noClasses().that().resideInAPackage("..api..")
       .should().dependOnClassesThat().resideInAPackage("..repo..")

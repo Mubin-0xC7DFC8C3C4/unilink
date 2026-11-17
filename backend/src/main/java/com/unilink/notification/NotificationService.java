@@ -20,7 +20,7 @@ public class NotificationService {
     notifications.save(n);
   }
   @Transactional(readOnly=true)
-  public List<Notification> list(Long userId, int limit){ return notifications.findByRecipientIdOrderByCreatedAtDesc(userId, PageRequest.of(0, Math.min(limit,50))); }
+  public List<NotificationDtos.NotificationDto> list(Long userId, int limit){ return notifications.findByRecipientIdOrderByCreatedAtDesc(userId, PageRequest.of(0, Math.min(limit,50))).stream().map(NotificationDtos.NotificationDto::from).toList(); }
   @Transactional(readOnly=true)
   public long unreadCount(Long userId){ return notifications.countByRecipientIdAndReadFlagFalse(userId); }
   @Transactional
@@ -28,7 +28,7 @@ public class NotificationService {
     notifications.findById(notificationId).filter(n->n.getRecipientId().equals(userId)).ifPresent(n->{ n.setReadFlag(true); notifications.save(n); });
   }
   @Transactional
-  public void markAllRead(Long userId){ list(userId,50).forEach(n->{ n.setReadFlag(true); notifications.save(n); }); }
+  public void markAllRead(Long userId){ notifications.findByRecipientIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 50)).forEach(n->{ n.setReadFlag(true); notifications.save(n); }); }
   @Transactional
   public void setPreference(Long userId, String type, boolean email, boolean inApp){
     NotificationPreference p = prefs.findByUserIdAndType(userId,type).orElseGet(NotificationPreference::new);

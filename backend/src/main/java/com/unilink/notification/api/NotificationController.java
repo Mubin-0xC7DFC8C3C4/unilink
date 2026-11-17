@@ -1,5 +1,5 @@
 package com.unilink.notification.api;
-import com.unilink.identity.domain.Notification; import com.unilink.notification.NotificationService;
+import com.unilink.notification.NotificationDtos; import com.unilink.notification.NotificationService;
 import com.unilink.security.AccessPolicy;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
 import java.util.*;
@@ -7,7 +7,7 @@ import java.util.*;
 public class NotificationController {
   private final NotificationService svc; private final AccessPolicy policy;
   public NotificationController(NotificationService s, AccessPolicy p){ svc=s; policy=p; }
-  @GetMapping public List<Notification> list(Authentication a, @RequestParam(defaultValue="20") int limit){
+  @GetMapping public List<NotificationDtos.NotificationDto> list(Authentication a, @RequestParam(defaultValue="20") int limit){
     var p = policy.requireStudent(a.getPrincipal()); return svc.list(p.userId(), limit);
   }
   @GetMapping("/unread-count") public Map<String,Long> unread(Authentication a){

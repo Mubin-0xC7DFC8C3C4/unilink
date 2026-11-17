@@ -27,9 +27,9 @@ public class MessagingService {
       roomMembers.findByRoomId(r.getId()).stream().map(RoomMember::getUserId).toList());
   }
   @Transactional
-  public ChatRoom getOrCreateDepartmentRoom(Principals.UnilinkUserPrincipal p){
+  public RoomDto getOrCreateDepartmentRoom(Principals.UnilinkUserPrincipal p){
     policy.requireVerified(p);
-    return rooms.findByTypeAndUniversityIdAndDepartmentId("DEPARTMENT", p.universityId(), p.departmentId()).stream().findFirst()
+    ChatRoom room = rooms.findByTypeAndUniversityIdAndDepartmentId("DEPARTMENT", p.universityId(), p.departmentId()).stream().findFirst()
       .orElseGet(() -> {
         ChatRoom r = new ChatRoom(); r.setPublicId(UUID.randomUUID().toString()); r.setType("DEPARTMENT");
         r.setName("Department"); r.setUniversityId(p.universityId()); r.setDepartmentId(p.departmentId()); r.setCreatedBy(p.userId());
@@ -37,11 +37,12 @@ public class MessagingService {
         RoomMember m = new RoomMember(); m.setRoomId(r.getId()); m.setUserId(p.userId()); m.setRole("MEMBER"); roomMembers.save(m);
         return r;
       });
+    return toDto(room);
   }
   @Transactional
-  public ChatRoom getOrCreateUniversityRoom(Principals.UnilinkUserPrincipal p){
+  public RoomDto getOrCreateUniversityRoom(Principals.UnilinkUserPrincipal p){
     policy.requireVerified(p);
-    return rooms.findByTypeAndUniversityIdAndDepartmentId("UNIVERSITY", p.universityId(), null).stream().findFirst()
+    ChatRoom room = rooms.findByTypeAndUniversityIdAndDepartmentId("UNIVERSITY", p.universityId(), null).stream().findFirst()
       .orElseGet(() -> {
         ChatRoom r = new ChatRoom(); r.setPublicId(UUID.randomUUID().toString()); r.setType("UNIVERSITY");
         r.setName("University"); r.setUniversityId(p.universityId()); r.setCreatedBy(p.userId());
@@ -49,6 +50,7 @@ public class MessagingService {
         RoomMember m = new RoomMember(); m.setRoomId(r.getId()); m.setUserId(p.userId()); m.setRole("MEMBER"); roomMembers.save(m);
         return r;
       });
+    return toDto(room);
   }
   @Transactional
   public RoomDto createPrivateRoom(Principals.UnilinkUserPrincipal p, Long otherUserId){

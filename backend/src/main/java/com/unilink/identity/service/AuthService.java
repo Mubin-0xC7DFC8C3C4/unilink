@@ -76,7 +76,7 @@ public class AuthService {
     ocrJob.runOcr(req.getId(), idKey, u.getFullName(), u.getStudentId());
     return toDto(u);
   }
-  static UserDto toDto(User u){
+  public static UserDto toDto(User u){
     return new UserDto(u.getId(), u.getFullName(), u.getEmail(), u.getPhone(), u.getUniversityId(), u.getDepartmentId(),
       u.getBatchId(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt());
   }

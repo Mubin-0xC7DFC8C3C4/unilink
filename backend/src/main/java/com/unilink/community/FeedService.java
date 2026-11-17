@@ -7,7 +7,7 @@ import java.time.LocalDateTime; import java.util.*;
 @Service
 public class FeedService {
   public record PostDto(Long id, Long authorId, String authorName, String type, String visibility, String title,
-                        String body, String status, LocalDateTime createdAt, Long eventDeadline, String regLink) {}
+                        String body, String status, LocalDateTime createdAt, LocalDateTime eventDeadline, String regLink) {}
   private final PostRepository posts; private final UserRepository users; private final EventDetailRepository events;
   public FeedService(PostRepository posts, UserRepository users, EventDetailRepository events){
     this.posts=posts; this.users=users; this.events=events; }
@@ -33,7 +33,7 @@ public class FeedService {
       next = CursorCodec.encode(last.getCreatedAt().atZone(java.time.ZoneOffset.UTC).toInstant().toEpochMilli(), last.getId()); }
     return PageResponse.of(result.stream().map(this::toDto).toList(), next);
   }
-  PostDto toDto(Post post){
+  public PostDto toDto(Post post){
     String name = users.findById(post.getAuthorId()).map(User::getFullName).orElse("Deleted user");
     EventDetail ev = "EVENT".equals(post.getType()) ? events.findByPostId(post.getId()).orElse(null) : null;
     return new PostDto(post.getId(), post.getAuthorId(), name, post.getType(), post.getVisibility(),

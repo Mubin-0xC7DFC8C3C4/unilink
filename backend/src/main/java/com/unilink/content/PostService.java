@@ -41,7 +41,7 @@ public class PostService {
     return feedService.toDto(post);
   }
   @Transactional
-  public Comment addComment(Principals.UnilinkUserPrincipal p, Long postId, String body, List<Long> mentionUserIds){
+  public ContentDtos.CommentDto addComment(Principals.UnilinkUserPrincipal p, Long postId, String body, List<Long> mentionUserIds){
     policy.requireVerified(p);
     validator.validate(body, null);
     Post post = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Post"));
@@ -51,10 +51,10 @@ public class PostService {
     if (mentionUserIds!=null) for (Long m : mentionUserIds){ // D-025: mentions reference user id
       if (users.existsById(m)){ CommentMention cm=new CommentMention(); cm.setCommentId(c.getId()); cm.setMentionedUserId(m); mentions.save(cm); }
     }
-    return c;
+    return ContentDtos.CommentDto.from(c);
   }
   @Transactional(readOnly=true)
-  public List<Comment> listComments(Long postId){ return comments.findByPostIdOrderByCreatedAtAsc(postId); }
+  public List<ContentDtos.CommentDto> listComments(Long postId){ return comments.findByPostIdOrderByCreatedAtAsc(postId).stream().map(ContentDtos.CommentDto::from).toList(); }
   @Transactional
   public void react(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reaction){
     policy.requireVerified(p);
@@ -78,7 +78,7 @@ public class PostService {
     bookmarks.deleteByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId);
   }
   @Transactional(readOnly=true)
-  public List<Bookmark> listBookmarks(Long userId){ return bookmarks.findByUserIdOrderByCreatedAtDesc(userId); }
+  public List<ContentDtos.BookmarkDto> listBookmarks(Long userId){ return bookmarks.findByUserIdOrderByCreatedAtDesc(userId).stream().map(ContentDtos.BookmarkDto::from).toList(); }
   // ---- events (D-023, D-024) ----
   @Transactional
   public FeedService.PostDto createEvent(Principals.UnilinkUserPrincipal p, String visibility, String title, String body,

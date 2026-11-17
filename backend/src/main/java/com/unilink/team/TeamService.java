@@ -18,7 +18,7 @@ public class TeamService {
     this.roomMembers=roomMembers; this.policy=policy; this.events=events;
   }
   @Transactional
-  public Team createTeam(Principals.UnilinkUserPrincipal p, Long eventPostId, String name, int maxSize){
+  public TeamDtos.TeamDto createTeam(Principals.UnilinkUserPrincipal p, Long eventPostId, String name, int maxSize){
     policy.requireVerified(p);
     Post post = posts.findById(eventPostId).orElseThrow(() -> new Exceptions.NotFound("Event"));
     if (!"EVENT".equals(post.getType())) throw new Exceptions.BadRequest("NOT_AN_EVENT","Teams belong to events");
@@ -32,10 +32,10 @@ public class TeamService {
     room.setName(name); room.setTeamId(t.getId()); room.setCreatedBy(p.userId());
     room = rooms.save(room);
     RoomMember rm = new RoomMember(); rm.setRoomId(room.getId()); rm.setUserId(p.userId()); rm.setRole("ADMIN"); roomMembers.save(rm);
-    return t;
+    return TeamDtos.TeamDto.from(t);
   }
   @Transactional
-  public TeamJoinRequest requestJoin(Principals.UnilinkUserPrincipal p, Long teamId, String message){
+  public TeamDtos.TeamJoinRequestDto requestJoin(Principals.UnilinkUserPrincipal p, Long teamId, String message){
     policy.requireVerified(p);
     Team t = teams.findById(teamId).orElseThrow(() -> new Exceptions.NotFound("Team"));
     if (!"OPEN".equals(t.getStatus())) throw new Exceptions.BadRequest("TEAM_NOT_OPEN","Team is not accepting members");
@@ -44,7 +44,7 @@ public class TeamService {
     if (requests.existsByTeamIdAndUserIdAndStatus(teamId, p.userId(), "PENDING"))
       throw new Exceptions.Conflict("REQUEST_PENDING","You already have a pending request");
     TeamJoinRequest r = new TeamJoinRequest(); r.setTeamId(teamId); r.setUserId(p.userId());
-    r.setStatus("PENDING"); r.setMessage(message); return requests.save(r);
+    r.setStatus("PENDING"); r.setMessage(message); return TeamDtos.TeamJoinRequestDto.from(requests.save(r));
   }
   @Transactional
   public void decideRequest(Principals.UnilinkUserPrincipal p, Long requestId, boolean accept){
@@ -64,12 +64,12 @@ public class TeamService {
     events.publishEvent(new DomainEvents.TeamJoinAccepted(t.getId(), r.getUserId(), t.getEventPostId()));
   }
   @Transactional(readOnly=true)
-  public List<Team> listForEvent(Long eventPostId){ return teams.findByEventPostId(eventPostId); }
+  public List<TeamDtos.TeamDto> listForEvent(Long eventPostId){ return teams.findByEventPostId(eventPostId).stream().map(TeamDtos.TeamDto::from).toList(); }
   @Transactional(readOnly=true)
-  public List<TeamJoinRequest> pendingRequests(Long teamId, Principals.UnilinkUserPrincipal p){
+  public List<TeamDtos.TeamJoinRequestDto> pendingRequests(Long teamId, Principals.UnilinkUserPrincipal p){
     Team t = teams.findById(teamId).orElseThrow(() -> new Exceptions.NotFound("Team"));
     policy.requireOwnerOr404(p, t.getCreatorId());
-    return requests.findByTeamIdAndStatusOrderByCreatedAtAsc(teamId, "PENDING");
+    return requests.findByTeamIdAndStatusOrderByCreatedAtAsc(teamId, "PENDING").stream().map(TeamDtos.TeamJoinRequestDto::from).toList();
   }
   @Transactional
   public void closeTeamsForEvent(Long eventPostId){

@@ -1,6 +1,6 @@
 package com.unilink.community.api;
 import com.unilink.admin.AdminService; import com.unilink.common.PageResponse;
-import com.unilink.community.FeedService; import com.unilink.identity.domain.Announcement;
+import com.unilink.community.FeedService; import com.unilink.identity.dto.CatalogDtos.AnnouncementDto;
 import com.unilink.security.AccessPolicy;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
 import java.util.List;
@@ -20,7 +20,7 @@ public class FeedController {
     return feed.feed(p, level, cursor, limit, sector);
   }
   @GetMapping("/api/announcements")
-  public List<Announcement> announcements(Authentication a){
+  public List<AnnouncementDto> announcements(Authentication a){
     var p = policy.requireStudent(a.getPrincipal());
     return admin.activeAnnouncements(p);
   }

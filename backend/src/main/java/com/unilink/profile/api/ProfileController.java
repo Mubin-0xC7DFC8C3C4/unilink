@@ -1,5 +1,5 @@
 package com.unilink.profile.api;
-import com.unilink.identity.domain.*; import com.unilink.profile.ProfileService;
+import com.unilink.profile.ProfileDtos; import com.unilink.profile.ProfileService;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
 import java.util.*;
@@ -20,18 +20,18 @@ public class ProfileController {
     Principals.UnilinkUserPrincipal p = a==null?null:(Principals.UnilinkUserPrincipal) a.getPrincipal();
     return service.getProfile(id, p);
   }
-  @PostMapping("/me/projects") public Project addProject(Authentication a, @RequestBody TextPayload r){
+  @PostMapping("/me/projects") public ProfileDtos.ProjectDto addProject(Authentication a, @RequestBody TextPayload r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     return service.addProject(p.userId(), r.title(), r.description(), r.url());
   }
   @DeleteMapping("/me/projects/{id}") public Map<String,String> deleteProject(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); service.deleteProject(p.userId(), id); return Map.of("status","deleted");
   }
-  @PostMapping("/me/education") public EducationEntry addEducation(Authentication a, @RequestBody TextPayload r){
+  @PostMapping("/me/education") public ProfileDtos.EducationEntryDto addEducation(Authentication a, @RequestBody TextPayload r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     return service.addEducation(p.userId(), r.institution(), r.degree(), r.year());
   }
-  @PostMapping("/me/achievements") public Achievement addAchievement(Authentication a, @RequestBody TextPayload r){
+  @PostMapping("/me/achievements") public ProfileDtos.AchievementDto addAchievement(Authentication a, @RequestBody TextPayload r){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     return service.addAchievement(p.userId(), r.title(), r.description(), r.year());
   }

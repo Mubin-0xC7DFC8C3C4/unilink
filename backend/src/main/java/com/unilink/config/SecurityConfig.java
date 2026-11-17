@@ -1,6 +1,7 @@
 package com.unilink.config;
 import com.unilink.identity.repo.*; import com.unilink.security.Principals;
 import jakarta.servlet.*; import jakarta.servlet.http.*;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.*; import org.springframework.core.annotation.Order;
 import org.springframework.security.authentication.*; import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -62,8 +63,8 @@ public class SecurityConfig {
       .frameOptions(f -> f.deny())
       .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000))
       .referrerPolicy(r -> r.policy(org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
-      .permissionsPolicy(p -> p.policy("camera=(), microphone=(), geolocation=()"))
-      .contentTypeOptions(c -> {}));
+      .contentTypeOptions(c -> {})
+      .permissionsPolicy(p -> p.policy("camera=(), microphone=(), geolocation=()")));
   }
   /** Admin idle timeout 30 min (D-031): tracked per session; the student timeout is 2 h (D-013). */
   static class AdminIdleFilter extends OncePerRequestFilter {

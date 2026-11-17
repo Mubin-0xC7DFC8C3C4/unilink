@@ -24,7 +24,7 @@ public class ModerationService {
   int threshold(){ return settings.findById("report.auto_hide_threshold").map(s->{ try{return Integer.parseInt(s.getSettingValue());}catch(Exception e){return 5;} }).orElse(5); }
   /** Chain of Responsibility: report eligibility (verified, not owner, one active report). */
   @Transactional
-  public Report report(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reason){
+  public ModerationDtos.ReportDto report(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reason){
     policy.requireVerified(p);
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is required");
     Long ownerId = resolveOwner(targetType, targetId);
@@ -33,15 +33,16 @@ public class ModerationService {
       throw new Exceptions.Conflict("ALREADY_REPORTED","You have already reported this item");
     Report r = new Report(); r.setReporterId(p.userId()); r.setTargetType(targetType); r.setTargetId(targetId);
     r.setReason(reason); r.setStatus("ACTIVE"); r = reports.save(r);
+    final Long reportId = r.getId();
     if ("MESSAGE".equals(targetType)){
       // D-033: snapshot this message + 10 preceding at report time; no general conversation access.
       messages.findById(targetId).ifPresent(msg -> {
-        ModerationSnapshot s = new ModerationSnapshot(); s.setReportId(r.getId()); s.setMessageId(msg.getId());
+        ModerationSnapshot s = new ModerationSnapshot(); s.setReportId(reportId); s.setMessageId(msg.getId());
         s.setSenderId(msg.getSenderId()); s.setBody(msg.getBody()); snapshots.save(s);
       });
     }
     maybeAutoHide(r);
-    return r;
+    return ModerationDtos.ReportDto.from(r);
   }
   private Long resolveOwner(String targetType, Long targetId){
     return switch (targetType){
@@ -94,20 +95,20 @@ public class ModerationService {
     }
   }
   @Transactional
-  public Appeal appeal(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reason){
+  public ModerationDtos.AppealDto appeal(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reason){
     policy.requireVerified(p);
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","Appeal reason is required");
     Appeal a = new Appeal(); a.setAppellantId(p.userId()); a.setTargetType(targetType); a.setTargetId(targetId);
-    a.setReason(reason); a.setStatus("PENDING"); return appeals.save(a);
+    a.setReason(reason); a.setStatus("PENDING"); return ModerationDtos.AppealDto.from(appeals.save(a));
   }
   /** Public appeal via the single-use link sent on suspension (D-019). */
   @Transactional
-  public Appeal appealByToken(String token, String targetType, Long targetId, String reason){
+  public ModerationDtos.AppealDto appealByToken(String token, String targetType, Long targetId, String reason){
     String hash = com.unilink.common.Hashing.sha256(token);
     Appeal a = appeals.findByTokenHash(hash).orElseThrow(() -> new Exceptions.NotFound("Appeal link"));
     if (a.getTokenExpiresAt()!=null && a.getTokenExpiresAt().isBefore(LocalDateTime.now()))
       throw new Exceptions.BadRequest("TOKEN_EXPIRED","Appeal link has expired");
-    a.setReason(reason); a.setStatus("PENDING"); return appeals.save(a);
+    a.setReason(reason); a.setStatus("PENDING"); return ModerationDtos.AppealDto.from(appeals.save(a));
   }
   /** Creates a single-use appeal link token for a suspended/banned user (D-019).
    *  Only the SHA-256 hash is stored; the plaintext token is returned once to the caller
