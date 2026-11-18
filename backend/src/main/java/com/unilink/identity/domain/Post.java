@@ -18,5 +18,8 @@ public class Post {
   @Column(name="status") private String status;
   @Column(name="created_at") private LocalDateTime createdAt;
   @Column(name="updated_at") private LocalDateTime updatedAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: same NULL-to-NOT-NULL class as AdminAccount (V004 updated_at):
+  // PostService.createPost sets no updatedAt, so the insert sent explicit NULL.
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(updatedAt==null) updatedAt=createdAt; }
+  @PreUpdate void onUpdate(){ updatedAt=LocalDateTime.now(); }
 }

@@ -12,5 +12,8 @@ public class AdminAlert {
   @Column(name="message") private String message;
   @Column(name="read_flag") private Boolean readFlag;
   @Column(name="created_at") private LocalDateTime createdAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: read_flag is NOT NULL DEFAULT 0 (V003); both writers (AdminService
+  // overdue alerts, ModerationService strike alerts) omit it, so the insert
+  // sent explicit NULL. The strike path swallowed the failure in a catch.
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(readFlag==null) readFlag=false; }
 }

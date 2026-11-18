@@ -18,5 +18,10 @@ public class AdminAccount {
   @Column(name="temp_password_expires_at") private LocalDateTime tempPasswordExpiresAt;
   @Column(name="created_at") private LocalDateTime createdAt;
   @Column(name="updated_at") private LocalDateTime updatedAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: updated_at is NOT NULL (V003) and must_change_password is NOT NULL
+  // (V010), but Hibernate sends an explicit NULL for a mapped field left
+  // null — the DB DEFAULT never fires. Bootstrap/createModerator set neither,
+  // so the insert failed on MySQL with "Column 'updated_at' cannot be null".
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(updatedAt==null) updatedAt=createdAt; if(mustChangePassword==null) mustChangePassword=false; }
+  @PreUpdate void onUpdate(){ updatedAt=LocalDateTime.now(); }
 }

@@ -12,5 +12,9 @@ public class Profile {
   @Column(name="phone_visible") private Boolean phoneVisible;
   @Column(name="created_at") private LocalDateTime createdAt;
   @Column(name="updated_at") private LocalDateTime updatedAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: updated_at is NOT NULL (V002) and phone_visible is NOT NULL
+  // DEFAULT 0; registration sets phoneVisible but no updatedAt, and the
+  // ProfileService orElseGet insert paths set neither.
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(updatedAt==null) updatedAt=createdAt; if(phoneVisible==null) phoneVisible=false; }
+  @PreUpdate void onUpdate(){ updatedAt=LocalDateTime.now(); }
 }

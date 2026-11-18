@@ -7,5 +7,7 @@ public class Skill {
   @Column(name="name") private String name;
   @Column(name="active") private Boolean active;
   @Column(name="created_at") private LocalDateTime createdAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: active is NOT NULL DEFAULT 1 (V001); ProfileService.addSkill builds
+  // a Skill with name only, so the insert sent explicit NULL.
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(active==null) active=true; }
 }

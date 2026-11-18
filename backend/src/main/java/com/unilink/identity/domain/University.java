@@ -10,5 +10,8 @@ public class University {
   @Column(name="active") private Boolean active;
   @Column(name="created_at") private LocalDateTime createdAt;
   @Column(name="updated_at") private LocalDateTime updatedAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: same NULL-to-NOT-NULL class as AdminAccount (V001 updated_at):
+  // AdminService.createUniversity sets no updatedAt, so the insert sent explicit NULL.
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(updatedAt==null) updatedAt=createdAt; }
+  @PreUpdate void onUpdate(){ updatedAt=LocalDateTime.now(); }
 }

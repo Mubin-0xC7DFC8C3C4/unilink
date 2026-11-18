@@ -19,5 +19,8 @@ public class VerificationRequest {
   @Column(name="decided_at") private LocalDateTime decidedAt;
   @Column(name="decided_by") private Long decidedBy;
   @Column(name="created_at") private LocalDateTime createdAt;
-  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
+  // D-157: submitted_at is NOT NULL DEFAULT CURRENT_TIMESTAMP(3) (V002), but
+  // neither registration nor resubmit sets it and onCreate did not either, so
+  // the insert sent explicit NULL. Same mechanism as the updated_at failures.
+  @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); if(submittedAt==null) submittedAt=createdAt; }
 }
