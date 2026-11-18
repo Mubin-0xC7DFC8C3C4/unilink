@@ -286,6 +286,10 @@ public class AdminService {
   @Transactional
   public void decideContent(Principals.AdminPrincipal admin, String targetType, Long targetId, String action, String reason, String ip){
     if (reason==null || reason.isBlank()) throw new Exceptions.BadRequest("REASON_REQUIRED","A reason is mandatory");
+    // D-140: a null targetType/targetId/action used to NPE the switches
+    // below (500). All three are client errors.
+    if (targetType==null || targetId==null) throw new Exceptions.BadRequest("INVALID_TARGET","Unknown moderation target");
+    if (action==null) throw new Exceptions.BadRequest("INVALID_ACTION","Unknown action");
     switch (targetType){
       case "POST", "EVENT" -> {
         Post p = posts.findById(targetId).orElseThrow(() -> new Exceptions.NotFound("Post"));
@@ -362,16 +366,32 @@ public class AdminService {
   // ---- master data (FR-ADM-10): deactivate, never hard-delete referenced rows ----
   @Transactional public UniversityDto createUniversity(Principals.AdminPrincipal admin, String name, String shortName, String domains, String ip){
     policy.requirePlatformAdmin(admin);
+    // D-149: universities.name has a unique key (V001 uk_universities_name)
+    // and there is no DataIntegrityViolation handler, so a duplicate used
+    // to surface as a 500 INTERNAL_ERROR instead of a 409.
+    if (universities.findByName(name).isPresent()) throw new Exceptions.Conflict("UNIVERSITY_EXISTS","A university with this name already exists");
     University u = new University(); u.setName(name); u.setShortName(shortName); u.setEmailDomains(domains); u.setActive(true);
     u = universities.save(u); audit.write(admin.adminId(),"MASTERDATA_CREATE","UNIVERSITY",u.getId(),null,Map.of(),ip); return UniversityDto.from(u);
   }
   @Transactional public DepartmentDto createDepartment(Principals.AdminPrincipal admin, Long universityId, Long catalogId, String name, String ip){
     policy.requirePlatformAdmin(admin);
+    // D-149: the department used to be saved blindly — a bogus university
+    // or catalog id failed on the V001 FK as a 500, and a duplicate
+    // (university, catalog) pair failed on uk_dept_uni_catalog as a 500.
+    if (universityId==null || universities.findById(universityId).isEmpty())
+      throw new Exceptions.NotFound("University");
+    if (catalogId==null || catalogs.findById(catalogId).isEmpty())
+      throw new Exceptions.NotFound("Department catalog");
+    if (departments.findByUniversityIdAndCatalogId(universityId, catalogId).isPresent())
+      throw new Exceptions.Conflict("DEPARTMENT_EXISTS","This university already has a department for that catalog entry");
     Department d = new Department(); d.setUniversityId(universityId); d.setCatalogId(catalogId); d.setName(name); d.setActive(true);
     d = departments.save(d); audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT",d.getId(),null,Map.of(),ip); return DepartmentDto.from(d);
   }
   @Transactional public SectorTagDto createSector(Principals.AdminPrincipal admin, String name, String ip){
     policy.requirePlatformAdmin(admin);
+    // D-149: sector_tags.name has a unique key (V001 uk_sector_name); same
+    // 500-instead-of-409 problem as createUniversity above.
+    if (sectors.findByName(name).isPresent()) throw new Exceptions.Conflict("SECTOR_EXISTS","A sector with this name already exists");
     SectorTag s = new SectorTag(); s.setName(name); s.setActive(true);
     s = sectors.save(s); audit.write(admin.adminId(),"MASTERDATA_CREATE","SECTOR",s.getId(),null,Map.of(),ip); return SectorTagDto.from(s);
   }
@@ -383,6 +403,13 @@ public class AdminService {
     if (admins.findByEmail(email).isPresent()) throw new Exceptions.Conflict("EMAIL_TAKEN","Admin email already exists");
     AdminAccount a = new AdminAccount(); a.setEmail(email); a.setPasswordHash(encoder.encode(password));
     a.setRole("UNIVERSITY_MODERATOR"); a.setUniversityId(universityId); a.setActive(true); a.setTotpEnrolled(false);
+    // D-120: the initial password is Platform-Admin-issued, so the
+    // moderator must rotate it at first login — same rule as the bootstrap
+    // admin (D-119) and resetModeratorCredentials (D-094). No 24 h expiry
+    // is set here: unlike a reset, a new moderator may legitimately first
+    // log in days after creation, and an expiry would lock them out
+    // before first use (owner to decide if that should change).
+    a.setMustChangePassword(true);
     a = admins.save(a);
     audit.write(admin.adminId(), "MODERATOR_CREATE", "ADMIN", a.getId(), null, Map.of("universityId", universityId), ip);
     return AdminAccountDto.from(a);

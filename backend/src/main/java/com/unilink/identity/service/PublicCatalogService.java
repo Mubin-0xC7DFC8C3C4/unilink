@@ -22,7 +22,8 @@ public class PublicCatalogService {
   public List<DepartmentCatalogDto> catalog(){ return catalogs.findByActiveTrue().stream().map(DepartmentCatalogDto::from).toList(); }
   @Transactional(readOnly=true)
   public List<BatchDto> batches(Long universityId, Long departmentId){
-    return (departmentId==null ? batches.findAll().stream().filter(b->b.getUniversityId().equals(universityId)).toList()
+    // D-153: scoped query instead of loading the whole batches table.
+    return (departmentId==null ? batches.findByUniversityIdAndActiveTrue(universityId)
       : batches.findByUniversityIdAndDepartmentIdAndActiveTrue(universityId, departmentId))
       .stream().map(BatchDto::from).toList();
   }

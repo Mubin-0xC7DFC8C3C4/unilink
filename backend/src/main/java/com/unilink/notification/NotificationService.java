@@ -34,7 +34,7 @@ public class NotificationService {
     notifications.findById(notificationId).filter(n->n.getRecipientId().equals(userId)).ifPresent(n->{ n.setReadFlag(true); notifications.save(n); });
   }
   @Transactional
-  public void markAllRead(Long userId){ notifications.findByRecipientIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 50)).forEach(n->{ n.setReadFlag(true); notifications.save(n); }); }
+  public void markAllRead(Long userId){ notifications.markAllRead(userId); }
   @Transactional
   public void setPreference(Long userId, String type, boolean email, boolean inApp){
     if (!email && SECURITY_EMAIL_TYPES.contains(type))

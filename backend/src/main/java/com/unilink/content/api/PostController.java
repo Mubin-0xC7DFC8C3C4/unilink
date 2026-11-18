@@ -121,15 +121,39 @@ public class PostController {
   @PostMapping("/events/{id}/respond") public Map<String,String> respond(Authentication a, @PathVariable Long id, @RequestParam String response){
     var p = policy.requireStudent(a.getPrincipal()); posts.respondToEvent(p, id, response); return Map.of("status","ok");
   }
+  /** Calendar event (D-141): camelCase like every other DTO — the old
+   *  raw {@code queryForList} map exposed the snake_case {@code reg_link}
+   *  column name, the one non-camelCase key in the student API. */
+  public record CalendarEventDto(Long id, String title, LocalDateTime deadline, String location, String regLink) {}
   /** Calendar: in-scope events with deadline in range (D-024 deadline>now filter applies). */
   @GetMapping("/calendar")
-  public List<Map<String,Object>> calendar(Authentication a, @RequestParam String from, @RequestParam String to){
+  public List<CalendarEventDto> calendar(Authentication a, @RequestParam String from, @RequestParam String to){
     var p = policy.requireStudent(a.getPrincipal());
-    return jdbc.queryForList("""
+    // D-141: from/to were passed straight to the SQL comparison, so
+    // garbage dates were silently coerced (H2/MySQL) and the endpoint
+    // answered 200 with wrong results instead of 400. Accepts a date
+    // (2026-11-01, as the frontend sends) or an ISO local date-time.
+    LocalDateTime fromDt = parseCalendarBound(from, "from");
+    LocalDateTime toDt = parseCalendarBound(to, "to");
+    List<Map<String,Object>> rows = jdbc.queryForList("""
       SELECT p.id, p.title, e.deadline, e.location, e.reg_link FROM posts p
       JOIN event_details e ON e.post_id=p.id
       WHERE p.type='EVENT' AND p.status='ACTIVE' AND e.deadline>? AND e.deadline<=? AND e.archived_at IS NULL
       AND (p.visibility='NATIONAL' OR p.scope_university_id=?)
-      ORDER BY e.deadline""", from, to, p.universityId());
+      ORDER BY e.deadline""", fromDt, toDt, p.universityId());
+    return rows.stream().map(r -> new CalendarEventDto(
+      r.get("id")==null ? null : ((Number) r.get("id")).longValue(),
+      (String) r.get("title"),
+      r.get("deadline") instanceof java.sql.Timestamp ts ? ts.toLocalDateTime() : (LocalDateTime) r.get("deadline"),
+      (String) r.get("location"), (String) r.get("reg_link"))).toList();
+  }
+  private static LocalDateTime parseCalendarBound(String value, String name){
+    if (value==null) throw new com.unilink.common.Exceptions.BadRequest("INVALID_REQUEST","Calendar bound '"+name+"' is required");
+    try { return LocalDateTime.parse(value); }
+    catch (java.time.format.DateTimeParseException ignored) { /* fall through to date-only */ }
+    try { return java.time.LocalDate.parse(value).atStartOfDay(); }
+    catch (java.time.format.DateTimeParseException e){
+      throw new com.unilink.common.Exceptions.BadRequest("INVALID_REQUEST","Calendar bound '"+name+"' must be a date (YYYY-MM-DD) or date-time");
+    }
   }
 }

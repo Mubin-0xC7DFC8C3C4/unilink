@@ -14,20 +14,31 @@ public class PostService {
   private final PostRepository posts; private final CommentRepository comments; private final CommentMentionRepository mentions;
   private final ReactionRepository reactions; private final BookmarkRepository bookmarks; private final PostSectorTagRepository postSectors;
   private final EventDetailRepository events; private final EventResponseRepository responses; private final UserRepository users;
-  private final AttachmentRepository attachments;
+  private final AttachmentRepository attachments; private final SectorTagRepository sectors;
   private final AccessPolicy policy; private final ContentValidator validator; private final FeedService feedService;
   private final StorageGateway storage; private final UploadValidator uploads;
   public PostService(PostRepository posts, CommentRepository comments, CommentMentionRepository mentions,
       ReactionRepository reactions, BookmarkRepository bookmarks, PostSectorTagRepository postSectors,
       EventDetailRepository events, EventResponseRepository responses, UserRepository users,
-      AttachmentRepository attachments,
+      AttachmentRepository attachments, SectorTagRepository sectors,
       AccessPolicy policy, ContentValidator validator, FeedService feedService,
       StorageGateway storage, UploadValidator uploads){
     this.posts=posts; this.comments=comments; this.mentions=mentions; this.reactions=reactions; this.bookmarks=bookmarks;
     this.postSectors=postSectors; this.events=events; this.responses=responses; this.users=users;
-    this.attachments=attachments;
+    this.attachments=attachments; this.sectors=sectors;
     this.policy=policy; this.validator=validator; this.feedService=feedService;
     this.storage=storage; this.uploads=uploads;
+  }
+  /** D-150: sector ids must exist and be deduplicated before any
+   *  PostSectorTag row is written. post_sector_tags has an FK to
+   *  sector_tags (RESTRICT) and a (post_id, sector_tag_id) unique key, so
+   *  an unknown id or a repeated id used to fail the save as a 500
+   *  DataIntegrityViolation instead of a 404. */
+  private List<Long> validSectorIds(List<Long> sectorIds){
+    if (sectorIds==null) return List.of();
+    List<Long> distinct = new ArrayList<>(new LinkedHashSet<>(sectorIds));
+    for (Long s : distinct) if (!sectors.existsById(s)) throw new Exceptions.NotFound("Sector");
+    return distinct;
   }
   @Transactional
   public FeedService.PostDto createPost(Principals.UnilinkUserPrincipal p, String type, String visibility, String title, String body, List<Long> sectorIds){
@@ -41,7 +52,7 @@ public class PostService {
     post.setTitle(title); post.setBody(body); post.setStatus("ACTIVE");
     post.setScopeUniversityId(p.universityId()); post.setScopeDepartmentId(p.departmentId()); post.setScopeCatalogId(p.catalogId());
     post = posts.save(post);
-    if (sectorIds!=null) for (Long s : sectorIds){ PostSectorTag t=new PostSectorTag(); t.setPostId(post.getId()); t.setSectorTagId(s); postSectors.save(t); }
+    for (Long s : validSectorIds(sectorIds)){ PostSectorTag t=new PostSectorTag(); t.setPostId(post.getId()); t.setSectorTagId(s); postSectors.save(t); }
     return feedService.toDto(post);
   }
   @Transactional(readOnly=true)
@@ -80,18 +91,33 @@ public class PostService {
   @Transactional
   public void react(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reaction){
     policy.requireVerified(p);
+    requireReactionTarget(targetType, targetId);
+    // D-140: the reaction value was an unvalidated free string — any value
+    // was persisted with 200. LIKE is the only reaction the product uses
+    // (frontend PostDetail, traceability FR-CNT-02 contract
+    // `POST /reactions?reaction=LIKE`); extend this set if reactions grow.
+    if (!"LIKE".equals(reaction)) throw new Exceptions.BadRequest("INVALID_REACTION","Unknown reaction");
     reactions.findByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId).ifPresentOrElse(
       r -> { r.setReaction(reaction); reactions.save(r); },
       () -> { Reaction r=new Reaction(); r.setUserId(p.userId()); r.setTargetType(targetType); r.setTargetId(targetId); r.setReaction(reaction); reactions.save(r); });
   }
+  /** D-140: a null targetType/targetId used to persist a junk reaction /
+   *  bookmark row (nullable columns, 200) or silently no-op the delete.
+   *  All three are client errors. */
+  private static void requireReactionTarget(String targetType, Long targetId){
+    if (targetType==null || targetType.isBlank() || targetId==null)
+      throw new Exceptions.BadRequest("INVALID_TARGET","Unknown reaction target");
+  }
   @Transactional
   public void unreact(Principals.UnilinkUserPrincipal p, String targetType, Long targetId){
     policy.requireVerified(p);
+    requireReactionTarget(targetType, targetId);
     reactions.deleteByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId);
   }
   @Transactional
   public void bookmark(Principals.UnilinkUserPrincipal p, String targetType, Long targetId){
     policy.requireVerified(p);
+    requireReactionTarget(targetType, targetId);
     if (!bookmarks.existsByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId)){
       Bookmark b=new Bookmark(); b.setUserId(p.userId()); b.setTargetType(targetType); b.setTargetId(targetId); bookmarks.save(b);
     }
@@ -99,6 +125,7 @@ public class PostService {
   @Transactional
   public void unbookmark(Principals.UnilinkUserPrincipal p, String targetType, Long targetId){
     policy.requireVerified(p);
+    requireReactionTarget(targetType, targetId);
     bookmarks.deleteByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId);
   }
   @Transactional(readOnly=true)
@@ -146,7 +173,7 @@ public class PostService {
     }
     if (sectorIds!=null){
       postSectors.deleteByPostId(id);
-      for (Long s : sectorIds){ PostSectorTag t=new PostSectorTag(); t.setPostId(id); t.setSectorTagId(s); postSectors.save(t); }
+      for (Long s : validSectorIds(sectorIds)){ PostSectorTag t=new PostSectorTag(); t.setPostId(id); t.setSectorTagId(s); postSectors.save(t); }
     }
     return feedService.toDto(posts.save(post));
   }
@@ -184,13 +211,15 @@ public class PostService {
       return r.get("id").in(sq);
     };
   }
-  /** Upcoming (FR-EVT-07) and past (archive) event lists, in the caller's scope. */
+  /** Upcoming (FR-EVT-07) and past (archive) event lists, in the caller's scope.
+   *  D-154: bounded to the 50 newest — this used to be an unbounded
+   *  findAll(spec, Sort), returning every matching event in the system. */
   @Transactional(readOnly=true)
   public List<FeedService.PostDto> listEvents(Principals.UnilinkUserPrincipal p, boolean past){
     Specification<Post> spec = Specification.where(visibleEvents(p))
       .and((r,q,cb) -> cb.equal(r.get("status"),"ACTIVE"))
       .and(eventTime(past));
-    return posts.findAll(spec, Sort.by(Sort.Direction.DESC,"createdAt")).stream().map(feedService::toDto).toList();
+    return posts.findAll(spec, org.springframework.data.domain.PageRequest.of(0, 50, Sort.by(Sort.Direction.DESC,"createdAt"))).getContent().stream().map(feedService::toDto).toList();
   }
   @Transactional
   public FeedService.PostDto updateEvent(Principals.UnilinkUserPrincipal p, Long id, String title, String body,

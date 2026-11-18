@@ -76,12 +76,16 @@ public class TeamService {
     Team t = teams.findById(r.getTeamId()).orElseThrow(() -> new Exceptions.NotFound("Team"));
     policy.requireOwnerOr404(p, t.getCreatorId()); // only creator decides (TC-14)
     if (!"PENDING".equals(r.getStatus())) throw new Exceptions.Conflict("ALREADY_DECIDED","Request already decided");
-    r.setStatus(accept?"ACCEPTED":"REJECTED"); r.setDecidedAt(java.time.LocalDateTime.now()); requests.save(r);
-    if (!accept) return;
+    if (!accept){ r.setStatus("REJECTED"); r.setDecidedAt(java.time.LocalDateTime.now()); requests.save(r); return; }
+    // D-145: every check that can fail runs BEFORE the request is marked
+    // ACCEPTED. Previously the request was saved ACCEPTED first and the
+    // ALREADY_IN_TEAM / missing-room checks threw after it, consuming the
+    // request (it could never be re-decided) without the user joining.
     if (members.existsByEventPostIdAndUserId(t.getEventPostId(), r.getUserId()))
       throw new Exceptions.Conflict("ALREADY_IN_TEAM","User already belongs to a team for this event");
-    TeamMember m = new TeamMember(); m.setTeamId(t.getId()); m.setEventPostId(t.getEventPostId()); m.setUserId(r.getUserId()); members.save(m);
     ChatRoom room = rooms.findByTypeAndTeamId("TEAM", t.getId()).orElseThrow(() -> new Exceptions.NotFound("Team chat room"));
+    r.setStatus("ACCEPTED"); r.setDecidedAt(java.time.LocalDateTime.now()); requests.save(r);
+    TeamMember m = new TeamMember(); m.setTeamId(t.getId()); m.setEventPostId(t.getEventPostId()); m.setUserId(r.getUserId()); members.save(m);
     RoomMember rm = new RoomMember(); rm.setRoomId(room.getId()); rm.setUserId(r.getUserId()); rm.setRole("MEMBER"); roomMembers.save(rm);
     long count = members.countByTeamId(t.getId());
     if (count >= t.getMaxSize()){ t.setStatus("FULL"); teams.save(t); }

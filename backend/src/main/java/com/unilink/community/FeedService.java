@@ -42,7 +42,8 @@ public class FeedService {
     EventDetail ev = "EVENT".equals(post.getType()) ? events.findById(post.getId()).orElse(null) : null;
     // SHAPE: commentCount counts the post's comments (same set listComments returns);
     // sectors are the post's sector tag names, dangling tags dropped, never fabricated.
-    long commentCount = comments.findByPostIdOrderByCreatedAtAsc(post.getId()).size();
+    // D-152: count via a COUNT query, not by loading every comment row.
+    long commentCount = comments.countByPostId(post.getId());
     List<String> sectorNames = postSectors.findByPostId(post.getId()).stream()
       .flatMap(t -> sectors.findById(t.getSectorTagId()).map(SectorTag::getName).stream()).toList();
     return new PostDto(post.getId(), post.getAuthorId(), name, post.getType(), post.getVisibility(),

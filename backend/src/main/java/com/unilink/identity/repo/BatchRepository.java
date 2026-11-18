@@ -8,4 +8,8 @@ import java.time.LocalDateTime;
 
 public interface BatchRepository extends JpaRepository<Batch, Long> {
   List<Batch> findByUniversityIdAndDepartmentIdAndActiveTrue(Long universityId, Long departmentId);
+  /** Audit Worker 2 (D-153): batches for a university without a department
+   *  filter. PublicCatalogService used to load the whole batches table
+   *  (findAll) and filter in memory. */
+  List<Batch> findByUniversityIdAndActiveTrue(Long universityId);
 }

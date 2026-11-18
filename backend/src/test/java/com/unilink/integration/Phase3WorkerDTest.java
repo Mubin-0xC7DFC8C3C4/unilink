@@ -332,6 +332,12 @@ class Phase3WorkerDTest {
     u.setIdCardKey(key2); u.setProfilePhotoKey(photoKey); users.save(u);
     VerificationRequest old = new VerificationRequest();
     old.setUserId(u.getId()); old.setStatus("REJECTED"); old.setOcrStatus("DONE");
+    // D-157: this request must really be the OLDER one. It used to rely on
+    // submittedAt staying NULL (the bug) so findTopBy...SubmittedAtDesc would
+    // return the factory request; now that @PrePersist sets submittedAt to the
+    // creation time, a request created here would be the newest, requestOf(u)
+    // would return it, and key1 would be overwritten before deletion runs.
+    old.setSubmittedAt(LocalDateTime.now().minusDays(1));
     old.setIdCardKey(key1); old.setProfilePhotoKey(photoKey); requests.save(old);
     VerificationRequest latest = requestOf(u);
     latest.setIdCardKey(key2); latest.setProfilePhotoKey(photoKey); requests.save(latest);
@@ -362,7 +368,11 @@ class Phase3WorkerDTest {
     fixtureWithStudents();
     User u = user("d3-a@example.com");
     LocalDateTime since = LocalDateTime.now().minusHours(1);
-    assertThrows(Exceptions.BadRequest.class, () -> auth.login(u.getEmail(), "WrongPass1", "127.0.0.1"));
+    // D-139: wrong-password login is 401 now (was BadRequest/400); the
+    // exception type here is AppException with code INVALID_CREDENTIALS.
+    var failed = assertThrows(Exceptions.AppException.class, () -> auth.login(u.getEmail(), "WrongPass1", "127.0.0.1"));
+    assertEquals(org.springframework.http.HttpStatus.UNAUTHORIZED, failed.status());
+    assertEquals("INVALID_CREDENTIALS", failed.code());
     assertEquals(1, loginAttempts.countByEmailAndSuccessFalseAndCreatedAtAfter(u.getEmail(), since));
     assertNotNull(auth.login(u.getEmail(), "Student123", "127.0.0.1"));
     assertEquals(1, loginAttempts.countByEmailAndSuccessFalseAndCreatedAtAfter(u.getEmail(), since));

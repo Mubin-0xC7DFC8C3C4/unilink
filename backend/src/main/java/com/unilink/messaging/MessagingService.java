@@ -86,6 +86,15 @@ public class MessagingService {
     if (!"VERIFIED".equals(other.getState())) throw new Exceptions.BadRequest("USER_NOT_VERIFIED","User is not verified");
     if (blocks.existsByBlockerIdAndBlockedId(otherUserId, p.userId()) || blocks.existsByBlockerIdAndBlockedId(p.userId(), otherUserId))
       throw new Exceptions.Forbidden("Messaging is blocked between these users");
+    // D-146: a 1:1 room for this pair already exists → return it. Every
+    // call used to create a fresh PRIVATE room, so the same pair
+    // accumulated duplicate conversations (chat_rooms has no unique key
+    // on the pair, so nothing stopped it).
+    for (RoomMember rm : roomMembers.findByUserId(p.userId())){
+      ChatRoom existing = rooms.findById(rm.getRoomId()).orElse(null);
+      if (existing!=null && "PRIVATE".equals(existing.getType())
+          && roomMembers.existsByRoomIdAndUserId(existing.getId(), otherUserId)) return toDto(existing);
+    }
     ChatRoom r = new ChatRoom(); r.setPublicId(UUID.randomUUID().toString()); r.setType("PRIVATE");
     r.setName(other.getFullName()); r.setCreatedBy(p.userId()); r = rooms.save(r);
     for (Long uid : List.of(p.userId(), otherUserId)){
@@ -283,6 +292,12 @@ public class MessagingService {
     policy.requireVerified(p);
     ChatRoom room = rooms.findByPublicId(roomPublicId).orElseThrow(() -> new Exceptions.NotFound("Room"));
     RoomMember me = roomMembers.findByRoomIdAndUserId(room.getId(), p.userId()).orElseThrow(() -> new Exceptions.NotFound("Room"));
+    // D-146: the message must exist and belong to this room. Any Long used
+    // to be accepted, so a caller could advance last_read_message_id past
+    // messages that do not exist (or live in another room) and corrupt
+    // everyone's read receipts for this room.
+    Message m = messages.findById(messageId).orElseThrow(() -> new Exceptions.NotFound("Message"));
+    if (!room.getId().equals(m.getRoomId())) throw new Exceptions.NotFound("Message");
     me.setLastReadMessageId(messageId); roomMembers.save(me);
   }
   @Transactional

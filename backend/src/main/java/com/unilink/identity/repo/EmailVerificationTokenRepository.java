@@ -8,4 +8,7 @@ import java.time.LocalDateTime;
 
 public interface EmailVerificationTokenRepository extends JpaRepository<EmailVerificationToken, Long> {
   Optional<EmailVerificationToken> findTopByUserIdAndUsedFalseOrderByCreatedAtDesc(Long userId);
+  /** Audit Worker 2 (D-148): direct lookup by token hash. verifyEmailByToken
+   *  used to scan the whole table (findAll) to find the row for a link. */
+  Optional<EmailVerificationToken> findTopByTokenHashAndUsedFalseOrderByCreatedAtDesc(String tokenHash);
 }

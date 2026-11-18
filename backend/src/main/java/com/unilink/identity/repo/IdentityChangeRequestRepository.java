@@ -8,4 +8,7 @@ import java.time.LocalDateTime;
 
 public interface IdentityChangeRequestRepository extends JpaRepository<IdentityChangeRequest, Long> {
   List<IdentityChangeRequest> findByUserIdOrderByCreatedAtDesc(Long userId);
+  /** Audit Worker 2 (D-151): one pending identity-change request per user —
+   *  a second submit while one is PENDING is a Conflict, not a duplicate row. */
+  boolean existsByUserIdAndStatus(Long userId, String status);
 }

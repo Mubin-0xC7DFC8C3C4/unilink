@@ -67,18 +67,26 @@ public class ProfileService {
   }
   @Transactional public ProfileDtos.ProjectDto addProject(Long userId, String title, String desc, String url){
     if (url!=null && url.toLowerCase().contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)");
+    // D-140: a null/blank title used to persist a junk row with 200.
+    if (title==null || title.isBlank()) throw new Exceptions.BadRequest("TITLE_REQUIRED","A project needs a title");
     Project pr=new Project(); pr.setUserId(userId); pr.setTitle(title); pr.setDescription(desc); pr.setUrl(url); return ProfileDtos.ProjectDto.from(projects.save(pr));
   }
   @Transactional public void deleteProject(Long userId, Long id){
     Project pr = projects.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Project")); projects.delete(pr);
   }
   @Transactional public ProfileDtos.EducationEntryDto addEducation(Long userId, String inst, String degree, Integer year){
+    // D-140: a null/blank institution used to persist a junk row with 200.
+    if (inst==null || inst.isBlank()) throw new Exceptions.BadRequest("INSTITUTION_REQUIRED","An education entry needs an institution");
     EducationEntry e=new EducationEntry(); e.setUserId(userId); e.setInstitution(inst); e.setDegree(degree); e.setYear(year); return ProfileDtos.EducationEntryDto.from(education.save(e));
   }
   @Transactional public ProfileDtos.AchievementDto addAchievement(Long userId, String title, String desc, Integer year){
+    // D-140: a null/blank title used to persist a junk row with 200.
+    if (title==null || title.isBlank()) throw new Exceptions.BadRequest("TITLE_REQUIRED","An achievement needs a title");
     Achievement a=new Achievement(); a.setUserId(userId); a.setTitle(title); a.setDescription(desc); a.setYear(year); return ProfileDtos.AchievementDto.from(achievements.save(a));
   }
   @Transactional public void addSkill(Long userId, String skillName){
+    // D-140: a null/blank name used to persist a junk Skill row with 200.
+    if (skillName==null || skillName.isBlank()) throw new Exceptions.BadRequest("SKILL_NAME_REQUIRED","A skill needs a name");
     Skill s = skills.findByName(skillName).orElseGet(() -> { Skill ns=new Skill(); ns.setName(skillName); return skills.save(ns); });
     if (!userSkills.existsByUserIdAndSkillId(userId, s.getId())){
       UserSkill us=new UserSkill(); us.setUserId(userId); us.setSkillId(s.getId()); userSkills.save(us);
@@ -86,6 +94,9 @@ public class ProfileService {
   }
   @Transactional public void removeSkill(Long userId, Long skillId){ userSkills.deleteByUserIdAndSkillId(userId, skillId); }
   @Transactional public void followSector(Long userId, Long sectorId){
+    // D-150: user_sector_follows has an FK to sector_tags (RESTRICT), so
+    // following a non-existent sector used to fail as a 500.
+    if (!sectors.existsById(sectorId)) throw new Exceptions.NotFound("Sector");
     if (!sectorFollows.existsByUserIdAndSectorTagId(userId, sectorId)){
       UserSectorFollow f=new UserSectorFollow(); f.setUserId(userId); f.setSectorTagId(sectorId); sectorFollows.save(f);
     }
@@ -100,6 +111,11 @@ public class ProfileService {
   @Transactional public void unfollow(Long followerId, Long followedId){ follows.deleteByFollowerIdAndFollowedId(followerId, followedId); }
   @Transactional public void unfollowSector(Long userId, Long sectorId){ sectorFollows.deleteByUserIdAndSectorTagId(userId, sectorId); }
   @Transactional public IdentityChangeRequest requestIdentityChange(Long userId, Long newUniversityId, Long newDepartmentId, String newStudentId){
+    // D-151: one PENDING request per user. A second submit while one is
+    // pending used to create a duplicate row; the admin decide path then
+    // had two live requests for the same change.
+    if (changeRequests.existsByUserIdAndStatus(userId, "PENDING"))
+      throw new Exceptions.Conflict("REQUEST_PENDING","You already have a pending identity-change request");
     // D-017: user stays Verified with old values until a reviewer approves.
     IdentityChangeRequest r=new IdentityChangeRequest();
     r.setUserId(userId); r.setNewUniversityId(newUniversityId); r.setNewDepartmentId(newDepartmentId);

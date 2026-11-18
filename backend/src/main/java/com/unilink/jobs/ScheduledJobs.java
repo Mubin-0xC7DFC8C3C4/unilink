@@ -23,7 +23,11 @@ public class ScheduledJobs {
     List<EventDetail> due = events.findByArchivedAtIsNullAndDeadlineBefore(LocalDateTime.now());
     for (EventDetail ev : due){
       ev.setArchivedAt(LocalDateTime.now()); events.save(ev);
-      posts.findById(ev.getId()).ifPresent(p -> { p.setStatus("ARCHIVED"); posts.save(p); });
+      // D-156: only ACTIVE events become ARCHIVED. A REMOVED or
+      // HIDDEN_ADMIN event used to be overwritten to ARCHIVED, losing
+      // its moderation state (and a later RESTORE would have to guess
+      // what it was). Teams still close for every past event.
+      posts.findById(ev.getId()).ifPresent(p -> { if ("ACTIVE".equals(p.getStatus())){ p.setStatus("ARCHIVED"); posts.save(p); } });
       teams.closeTeamsForEvent(ev.getId());
     }
     if (!due.isEmpty()) log.info("Archived {} past events", due.size());
