@@ -10,7 +10,10 @@ Package contents verified at build time:
 
 - Content commits end at `6290222` (backend audit report). The packaging
   commit on top adds only the Maven Wrapper files and this README —
-  see §12 for the full commit list.
+  see §12 for the full commit list. The latest commit on top of that
+  corrects this guide's Flyway wording (§1, §6, §10) for a machine
+  where `V001`–`V011` are already applied; no application code was
+  changed by it.
 - **Packaging note — secrets removed.** When this ZIP was built, the
   staging step replaced every real secret default in the packaged
   copies of `application.yml`, `application-test.yml`, `.env.example`
@@ -53,17 +56,17 @@ Verified while preparing this package:
   the backend console instead of sending them. No SMTP server is needed
   for local runs (see §7).
 
-**Not verified — read before you start:**
+**Read before you start:**
 
-- **Flyway has never run.** No migration `V001`–`V011` has ever been
-  executed by Flyway against a real MySQL database, in this project, on
-  any machine. The first backend boot on your PC is the first real
-  Flyway run. Watch the startup log as described in §6.
-- **`V006` is the highest-risk migration.** It creates two audit-log
-  immutability triggers using a `DELIMITER $$` block. Flyway 10.10.0
-  ships delimiter handling for MySQL scripts (checked by inspecting the
-  bundled `flyway-core-10.10.0.jar`), but this exact script has never
-  been executed by Flyway. If startup fails at `V006`, see §10.
+- **Flyway `V001`–`V011` have already run on your Windows PC**
+  (reported 2026-11-18). On the next boot Flyway must validate them
+  as already applied — it will not re-apply them. If it reports a
+  checksum mismatch, a migration file was modified; restore it from
+  this ZIP and do not edit applied migrations.
+- **`V006` already executed on Windows**, so its two audit triggers
+  already exist. The parsing check (Flyway 10.10.0, 79 statements,
+  `V006` = 10 statements) stands as background. Only on a fresh
+  database would `V006` run again — see the 1419 note in §10.
 - **No user workflow has ever run against a live MySQL backend.**
   Registration, OTP, login, admin login + TOTP, verification queue,
   messaging and every other flow are proven only by unit tests (H2) and
@@ -217,8 +220,10 @@ Notes:
 Flyway runs automatically when the backend starts
 (`spring.flyway.baseline-on-migrate: true`, migrations in
 `classpath:db/migration`). There is no separate migration command to
-run first. On the first boot it applies `V001`–`V011` in order and
-creates the `flyway_schema_history` table.
+run first. On a fresh database it applies `V001`–`V011` in order and
+creates the `flyway_schema_history` table. On your machine, where
+`V001`–`V011` are already applied, a successful boot shows Flyway
+validating them as already applied (no new migrations), then:
 
 Start the backend (first run downloads Maven 3.9.9 and all
 dependencies — allow a few minutes and do not interrupt it):
@@ -228,12 +233,9 @@ cd C:\unilink\backend
 .\mvnw.cmd spring-boot:run
 ```
 
-Watch the console. A successful first boot shows Flyway applying the
-migrations, then:
+Watch the console. A successful boot shows:
 
 ```text
-Successfully applied 11 migrations to schema `unilink_dev`
-...
 Started UnilinkBackendApplication ... Tomcat started on port 8080
 ```
 
@@ -336,7 +338,7 @@ the `DEV-ONLY` email/SMS lines.
 | `Access denied for user 'unilink_app'@'localhost'` | The password in `$env:DB_PASSWORD` does not match the MySQL user, or the user was created for only one host. Re-run the §4 SQL and make sure both `localhost` and `127.0.0.1` entries exist with the same password. |
 | `Access denied for user 'unilink_mig'@'localhost'` | Same as above, for `$env:DB_MIGRATION_PASSWORD`. |
 | `Unknown database 'unilink_dev'` | Create it with the §4 SQL. (The JDBC URL also has `createDatabaseIfNotExist=true`, so this should not normally happen.) |
-| Flyway fails at `V006` | The `DELIMITER $$` trigger block. This is the one migration never executed by Flyway (see §1). First, copy the exact error from the console. The fallback is to create the two triggers manually in MySQL Workbench or the `mysql` CLI, then repair Flyway's history with `.\mvnw.cmd flyway:repair` (it clears the failed entry so the next boot retries). Do **not** edit `V006` in place — a changed checksum will fail validation on every other machine. The trigger SQL, without the `DELIMITER` lines, is: `CREATE TRIGGER trg_audit_no_update BEFORE UPDATE ON audit_logs FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'; END;` and the same for `trg_audit_no_delete` with `BEFORE DELETE`. |
+| Flyway fails at `V006` | On a fresh database only — `V006` has already executed on your PC (see §1). The `DELIMITER $$` trigger block. If the failure is MySQL error 1419, check as root: `SHOW VARIABLES LIKE 'log_bin%';` — if `log_bin` is ON and `log_bin_trust_function_creators` is OFF, run once (local dev only): `SET PERSIST log_bin_trust_function_creators = 1;` then restart. The manual-trigger fallback needs the same setting, since the triggers are created as `unilink_mig`, which has no `SUPER` privilege. First, copy the exact error from the console. The fallback is to create the two triggers manually in MySQL Workbench or the `mysql` CLI, then repair Flyway's history with `.\mvnw.cmd flyway:repair` (it clears the failed entry so the next boot retries). Do **not** edit `V006` in place — a changed checksum will fail validation on every other machine. The trigger SQL, without the `DELIMITER` lines, is: `CREATE TRIGGER trg_audit_no_update BEFORE UPDATE ON audit_logs FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'; END;` and the same for `trg_audit_no_delete` with `BEFORE DELETE`. |
 | `FlywayException: Validate failed: ... checksum mismatch` | A migration file was modified after it ran. Restore the file from the ZIP and do not edit applied migrations; new changes go in a new `V012+` migration. |
 | `Table 'unilink_dev.flyway_schema_history' doesn't exist` after a failed boot | A previous boot failed part-way. Check which migration failed in the log, fix the cause, and restart — Flyway resumes from the failure point. |
 | `Address already in use: 8080` (or 5173) | Another backend/frontend is already running, or another program uses the port. Stop the other process, or find it with `Get-Process -Id (Get-NetTCPConnection -LocalPort 8080).OwningProcess`. |
@@ -379,6 +381,10 @@ the `DEV-ONLY` email/SMS lines.
 - `1f59a50` / `32ae119` — Phase 1: boot blockers and login throttle
 - Plus the Maven Wrapper files and this README (committed as the
   packaging commit on top of the above)
+- Latest commit on top — README-WINDOWS: correct the Flyway
+  first-boot wording (§1, §6, §10) for a machine where `V001`–`V011`
+  are already applied; add the error 1419 note as §10 troubleshooting
+  for fresh databases only
 
 ## 13. Security notes for this local setup
 
