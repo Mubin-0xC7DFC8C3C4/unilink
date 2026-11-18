@@ -8,9 +8,19 @@ machine.
 
 Package contents verified at build time:
 
-- Content commits end at `a054465` (Phase 3 report). The packaging
+- Content commits end at `6290222` (backend audit report). The packaging
   commit on top adds only the Maven Wrapper files and this README —
   see §12 for the full commit list.
+- **Packaging note — secrets removed.** When this ZIP was built, the
+  staging step replaced every real secret default in the packaged
+  copies of `application.yml`, `application-test.yml`, `.env.example`
+  and `ops/docker-compose.yml` with placeholders (see §5). The
+  repository copies still carry dev-only defaults — never use them.
+  In this package, `DB_PASSWORD`, `DB_MIGRATION_PASSWORD` and
+  `ENCRYPTION_KEY` **must** be set as environment variables, or the
+  backend fails fast at startup with a clear "could not resolve
+  placeholder" error. No password, API key, or other secret is shipped
+  in this ZIP.
 - Branch: `master`, working tree clean
 - Backend: Java 21 / Spring Boot 3.3.5 / Maven, `backend/` (includes the
   Maven Wrapper, `mvnw.cmd`, added for this package — no application code
@@ -179,14 +189,15 @@ $env:INITIAL_ADMIN_PASSWORD = "a-12-or-more-char-password"
 
 Notes:
 
-- If you do **not** set `DB_PASSWORD` / `DB_MIGRATION_PASSWORD`, the
-  backend falls back to the dev defaults compiled into
-  `application.yml`. Those defaults only work if your MySQL users were
-  created with exactly those passwords — do not do that on any machine
-  other than your own, and prefer setting the variables above.
-- `ENCRYPTION_KEY` encrypts admin TOTP secrets at rest. The shipped
-  default (`dev-only-encryption-key-change-me`) is public; set your own.
-  Changing it later invalidates already-enrolled authenticators.
+- If you do **not** set `DB_PASSWORD` / `DB_MIGRATION_PASSWORD` /
+  `ENCRYPTION_KEY`, the backend **fails fast at startup** with a clear
+  "could not resolve placeholder" error. The packaged
+  `application.yml` carries no password defaults — they were removed
+  when the ZIP was built (see §1). Set the variables above; there is
+  no fallback to use.
+- `ENCRYPTION_KEY` encrypts admin TOTP secrets at rest. It has no
+  default in this package; set your own long random value. Changing it
+  later invalidates already-enrolled authenticators.
 - `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` create the first
   Platform Admin at startup, **only if no admin accounts exist yet**.
   The password must be at least 12 characters. If you forget to set
@@ -351,6 +362,14 @@ the `DEV-ONLY` email/SMS lines.
 
 ## 12. Commits in this package
 
+- `6290222` — Backend audit report (36 issues, D-119–D-157)
+- `cc8622a` — Audit: bootstrap, auth and API error handling
+- `558c4b4` — Audit: repository/service defects
+- `e06c63d` — Audit: entity NULL-to-NOT-NULL insert failures
+  (fixes the reported `AdminAccount.updated_at` failure and the missing
+  `AdminBootstrap` must-change flag; full audit report:
+  `docs/phase-reports/08-backend-audit.md`)
+- `c0d6ab7` — Maven Wrapper 3.3.2 + Windows 11 local setup guide
 - `a054465` — Phase 3: report and per-workstream evidence (D-093–D-118)
 - `573d821` — Phase 3: data integrity + business-logic triage
 - `b29e5b6` — Phase 3: security hardening
@@ -363,10 +382,13 @@ the `DEV-ONLY` email/SMS lines.
 
 ## 13. Security notes for this local setup
 
-- Change every password and the encryption key from the shipped dev
-  defaults. The defaults in `application.yml` and `.env.example` are
-  public (they are committed in the repository) — they exist so the
-  app boots in a throwaway dev environment, not as credentials to use.
+- This package ships **no passwords or keys**: the packaged
+  `application.yml`, `application-test.yml`, `.env.example` and
+  `ops/docker-compose.yml` carry placeholders where the repository
+  copies have dev-only defaults. Set your own values as environment
+  variables (§5) and never reuse a password anywhere else. (The
+  repository copies still contain those dev defaults — they are public
+  and must never be used as real credentials.)
 - `.env` is git-ignored. Never commit it, never paste its contents
   into chat, and never reuse these passwords anywhere else.
 - The backend binds to `localhost` only in this setup and the dev
