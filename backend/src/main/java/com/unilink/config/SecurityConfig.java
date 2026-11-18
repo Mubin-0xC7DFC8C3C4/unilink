@@ -1,4 +1,5 @@
 package com.unilink.config;
+import com.unilink.common.ApiErrorWriter;
 import com.unilink.identity.repo.*; import com.unilink.security.MustChangePasswordFilter; import com.unilink.security.Principals;
 import jakarta.servlet.*; import jakarta.servlet.http.*;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -78,7 +79,12 @@ public class SecurityConfig {
       if (s != null && req.getRequestURI().startsWith("/api/admin/auth/") == false){
         Object last = s.getAttribute("ADMIN_LAST_ACTIVE");
         if (last instanceof Long l && Instant.now().toEpochMilli() - l > Duration.ofMinutes(30).toMillis()){
-          s.invalidate(); res.setStatus(401); return;
+          // D-138: was bare setStatus(401) with an empty body; the admin
+          // client parses ApiError JSON, so answer in that shape.
+          s.invalidate();
+          ApiErrorWriter.write(res, HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED",
+            "Admin session expired", req.getRequestURI());
+          return;
         }
         s.setAttribute("ADMIN_LAST_ACTIVE", Instant.now().toEpochMilli());
       }
@@ -91,7 +97,10 @@ public class SecurityConfig {
       .authenticationProvider(provider)
       .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED).sessionFixation(sf -> sf.migrateSession()))
       .authorizeHttpRequests(a -> a.requestMatchers("/api/admin/auth/**").permitAll().anyRequest().hasAuthority("MFA_VERIFIED"))
-      .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->res.sendError(401)).accessDeniedHandler((req,res,ex)->res.sendError(403)))
+      // D-138: was sendError(401/403) — container HTML error page, not the
+      // ApiError JSON every controller error uses. Same for the student chain.
+      .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->ApiErrorWriter.write(res, 401, "UNAUTHORIZED", "Admin authentication required", req.getRequestURI()))
+        .accessDeniedHandler((req,res,ex)->ApiErrorWriter.write(res, 403, "FORBIDDEN", "Access denied", req.getRequestURI())))
       .addFilterBefore(new AdminIdleFilter(), BasicAuthenticationFilter.class)
       .addFilterBefore(new MustChangePasswordFilter(), BasicAuthenticationFilter.class);
     csrf(http); headers(http);
@@ -110,7 +119,8 @@ public class SecurityConfig {
         .requestMatchers("/actuator/health","/actuator/info").permitAll()
         .requestMatchers("/v3/api-docs/**","/swagger-ui/**","/swagger-ui.html").permitAll()
         .anyRequest().authenticated())
-      .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->res.sendError(401)).accessDeniedHandler((req,res,ex)->res.sendError(403)));
+      .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->ApiErrorWriter.write(res, 401, "UNAUTHORIZED", "Authentication required", req.getRequestURI()))
+        .accessDeniedHandler((req,res,ex)->ApiErrorWriter.write(res, 403, "FORBIDDEN", "Access denied", req.getRequestURI())));
     csrf(http); headers(http);
     // D-094: a session flagged must-change-password may only reach the
     // change-password escape hatches (see MustChangePasswordFilter).

@@ -112,7 +112,8 @@ class OtpRateLimitTest {
     for (int i = 0; i < 5; i++)
       mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
           .content("{\"email\":\"" + email + "\",\"password\":\"WrongPass1\"}"))
-        .andExpect(status().isBadRequest())
+        // D-139: was 400; a failed sign-in is 401.
+        .andExpect(status().isUnauthorized())
         .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
     mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
         .content("{\"email\":\"" + email + "\",\"password\":\"WrongPass1\"}"))
@@ -130,13 +131,14 @@ class OtpRateLimitTest {
     User u = unverifiedUser("enum", "01940000002");
     MvcResult known = mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
         .content("{\"email\":\"" + u.getEmail() + "\",\"password\":\"WrongPass1\"}"))
-      .andExpect(status().isBadRequest())
+      // D-139: was 400; a failed sign-in is 401.
+      .andExpect(status().isUnauthorized())
       .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"))
       .andExpect(jsonPath("$.message").value("Email or password is incorrect"))
       .andReturn();
     mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
         .content("{\"email\":\"nobody-" + System.nanoTime() + "@example.com\",\"password\":\"WrongPass1\"}"))
-      .andExpect(status().isBadRequest())
+      .andExpect(status().isUnauthorized())
       .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"))
       .andExpect(jsonPath("$.message").value("Email or password is incorrect"));
     assertNotNull(known);

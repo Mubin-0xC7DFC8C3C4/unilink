@@ -79,7 +79,10 @@ public class AdminAuthService {
     catch (org.springframework.security.core.AuthenticationException e){
       throttle.recordFailure("admin-login:"+email);
       audit.write(null, "ADMIN_LOGIN_FAILED", "ADMIN", null, "Failed admin login for "+email, Map.of(), ip);
-      throw new Exceptions.BadRequest("INVALID_CREDENTIALS","Email or password is incorrect");
+      // D-139: was BadRequest (400); a failed sign-in is 401 — see
+      // AuthService.login. AdminLogin.tsx already branches on 401.
+      throw new Exceptions.AppException(org.springframework.http.HttpStatus.UNAUTHORIZED,
+        "INVALID_CREDENTIALS", "Email or password is incorrect");
     }
     var principal = (Principals.AdminPrincipal) auth.getPrincipal();
     AdminAccount account = admins.findById(principal.adminId()).orElse(null);

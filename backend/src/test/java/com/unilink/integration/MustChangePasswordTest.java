@@ -94,6 +94,18 @@ class MustChangePasswordTest {
     return e;
   }
 
+  // ---- D-120: createModerator must force rotation like every other
+  // admin-issued password (bootstrap D-119, reset D-094) ----
+  @Test void createModeratorSetsMustChangeFlagAndLoginSignalsIt() {
+    var mod = adminService.createModerator(platformAdmin(), email("mod-new"),
+      factory.seedMaster().mu().getId(), "ModeratorPass123", "127.0.0.1");
+    AdminAccount after = admins.findById(mod.id()).orElseThrow();
+    assertTrue(Boolean.TRUE.equals(after.getMustChangePassword()),
+      "newly created moderator must carry mustChangePassword=true (D-120)");
+    var login = adminAuth.login(mod.email(), "ModeratorPass123", "127.0.0.1");
+    assertTrue(login.mustChangePassword());
+  }
+
   // ---- D-093: admin password change ----
   @Test void adminChangePasswordRejectsWrongCurrentAndWeakAndSame() {
     AdminAccount a = factory.admin(email("chg"), "UNIVERSITY_MODERATOR", factory.seedMaster().mu().getId());
@@ -116,8 +128,11 @@ class MustChangePasswordTest {
     assertNull(after.getTempPasswordExpiresAt());
     assertTrue(encoder.matches("NewAdminPass123", after.getPasswordHash()));
     // Old password no longer authenticates; new one does.
-    assertCode(Exceptions.BadRequest.class, "INVALID_CREDENTIALS",
+    // D-139: login failure is 401 now (was BadRequest/400); the
+    // change-password wrong-current check above stays BadRequest.
+    var failed = assertCode(Exceptions.AppException.class, "INVALID_CREDENTIALS",
       () -> adminAuth.login(a.getEmail(), "Admin12345678", "127.0.0.1"));
+    assertEquals(org.springframework.http.HttpStatus.UNAUTHORIZED, failed.status());
     var ok = adminAuth.login(a.getEmail(), "NewAdminPass123", "127.0.0.1");
     assertFalse(ok.mustChangePassword());
   }

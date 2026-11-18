@@ -167,12 +167,14 @@ public class AuthService {
     otp.verifyEmailToken(u, token);
     users.save(u); maybeMoveToPendingReview(u); return toDto(u);
   }
-  /** Email link carries only the token; resolve the user from the newest unused token. */
+  /** Email link carries only the token; resolve the user from the token hash.
+   *  D-148: this used to scan the whole email_tokens table (findAll) on
+   *  every link click. Behaviour is unchanged: the row is still the newest
+   *  unused token for that hash, and verifyEmail below still enforces
+   *  that it is the user's newest unused token. */
   @Transactional
   public UserDto verifyEmailByToken(String token){
-    var row = emailTokenRepo.findAll().stream()
-      .filter(t -> !Boolean.TRUE.equals(t.getUsed()) && com.unilink.common.Hashing.sha256(token).equals(t.getTokenHash()))
-      .max(java.util.Comparator.comparing(com.unilink.identity.domain.EmailVerificationToken::getCreatedAt))
+    var row = emailTokenRepo.findTopByTokenHashAndUsedFalseOrderByCreatedAtDesc(com.unilink.common.Hashing.sha256(token))
       .orElseThrow(() -> new Exceptions.BadRequest("TOKEN_NOT_FOUND","No active verification link."));
     return verifyEmail(token, row.getUserId());
   }
@@ -203,11 +205,27 @@ public class AuthService {
       throttle.recordSuccess("login:"+email);
       recordLoginAttempt(email, ip, true);
       return auth;
-    } catch (Exceptions.AppException e){ throw e; }
+    } catch (Exceptions.AppException e){
+      // D-121: SUSPENDED/BANNED and TEMP_PASSWORD_EXPIRED rejections are
+      // login attempts too — without this they left no login_attempts row,
+      // so failed-login forensics (I-18: one row per login attempt) had a
+      // hole exactly for the attempts most worth reviewing.
+      recordLoginAttempt(email, ip, false);
+      throw e;
+    }
       catch (org.springframework.security.core.AuthenticationException e){
       throttle.recordFailure("login:"+email);
       recordLoginAttempt(email, ip, false);
-      throw new Exceptions.BadRequest("INVALID_CREDENTIALS","Email or password is incorrect"); // generic error (FR-AUTH-10)
+      // D-139: was BadRequest (400). A failed sign-in is an authentication
+      // failure — 401. Both login pages already branch on 401
+      // (Login.tsx / AdminLogin.tsx: `status===401 ? 'Incorrect email or
+      // password…'`); with 400 that branch was dead code. Code and message
+      // are unchanged, so the enumeration behaviour (identical error for
+      // unknown email vs wrong password) is unchanged. The wrong-current-
+      // password check in changePassword stays 400: that is an authenticated
+      // request-validation failure, not a sign-in attempt.
+      throw new Exceptions.AppException(org.springframework.http.HttpStatus.UNAUTHORIZED,
+        "INVALID_CREDENTIALS", "Email or password is incorrect"); // generic error (FR-AUTH-10)
     }
   }
   /** I-18: login_attempts is written, not dead — one row per login attempt,

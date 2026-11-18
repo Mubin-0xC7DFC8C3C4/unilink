@@ -19,7 +19,16 @@ public final class Principals {
     @Override public String getPassword(){ return passwordHash; }
     @Override public String getUsername(){ return email; }
     @Override public boolean isAccountNonExpired(){ return true; }
-    @Override public boolean isAccountNonLocked(){ return active && !"BANNED".equals(state) && !"SUSPENDED".equals(state); }
+    // D-123: SUSPENDED / BANNED must NOT lock the account here. The
+    // DaoAuthenticationProvider turns a false isAccountNonLocked into a
+    // LockedException (an AuthenticationException), which made
+    // AuthService.login answer "Email or password is incorrect" and
+    // silently skipped its own SUSPENDED/BANNED branch — the Forbidden
+    // with the D-019 appeal guidance was unreachable, so a suspended user
+    // was never told why login fails or about the appeal link. The state
+    // check lives in AuthService.login; this method only reflects the
+    // active flag (the provider still rejects disabled accounts).
+    @Override public boolean isAccountNonLocked(){ return active; }
     @Override public boolean isCredentialsNonExpired(){ return true; }
     @Override public boolean isEnabled(){ return active; }
   }

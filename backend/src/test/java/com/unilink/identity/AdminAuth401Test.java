@@ -49,10 +49,11 @@ class AdminAuth401Test {
     mvc.perform(get("/api/admin/auth/me"))
       .andExpect(status().isUnauthorized());
   }
-  @Test void adminLoginWithUnknownEmailIs400Not500() throws Exception {
+  @Test void adminLoginWithUnknownEmailIs401Not500() throws Exception {
     mvc.perform(post("/api/admin/auth/login").contentType(MediaType.APPLICATION_JSON)
         .content("{\"email\":\"nobody@example.com\",\"password\":\"whatever123456\"}"))
-      .andExpect(status().isBadRequest())
+      // D-139: was 400; a failed sign-in is 401 (code/message unchanged).
+      .andExpect(status().isUnauthorized())
       .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
   }
 }

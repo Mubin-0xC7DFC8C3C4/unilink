@@ -1,4 +1,5 @@
 package com.unilink.security;
+import com.unilink.common.ApiErrorWriter;
 import jakarta.servlet.*; import jakarta.servlet.http.*;
 import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException; import java.util.Set;
@@ -37,10 +38,10 @@ public class MustChangePasswordFilter extends OncePerRequestFilter {
         || ALLOWED.contains(req.getMethod()+" "+req.getRequestURI())){
       chain.doFilter(req, res); return;
     }
-    res.setStatus(HttpServletResponse.SC_FORBIDDEN);
-    res.setContentType("application/json");
-    String path = req.getRequestURI().replace("\\", "\\\\").replace("\"", "\\\"");
-    res.getWriter().write("{\"status\":403,\"code\":\"" + CODE
-      + "\",\"message\":\"You must change your password before using UniLink.\",\"path\":\"" + path + "\"}");
+    // D-138: was hand-built JSON with only status/code/message/path; now
+    // the shared ApiError writer, so the shape matches every other error
+    // (timestamp + traceId included).
+    ApiErrorWriter.write(res, HttpServletResponse.SC_FORBIDDEN, CODE,
+      "You must change your password before using UniLink.", req.getRequestURI());
   }
 }
