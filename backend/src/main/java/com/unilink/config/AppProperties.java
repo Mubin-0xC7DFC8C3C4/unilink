@@ -23,6 +23,6 @@ public record AppProperties(
   public record Storage(String provider, String localPath) {}
   public record Ocr(String provider, String dataPath, String languages) {}
   public record Sms(String provider, String apiUrl, String apiKey, String senderId) {}
-  public record Mail(String from, String host) {}
+  public record Mail(String provider, String from, String host) {}
   public record Security(Duration studentIdle, Duration adminIdle, int loginMaxAttempts, Duration loginLock, boolean csrfEnabled) {}
 }

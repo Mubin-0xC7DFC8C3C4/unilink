@@ -72,6 +72,10 @@ app:
     api-key: ${SMS_API_KEY:}
     sender-id: ${SMS_SENDER_ID:UniLink}
   mail:
+    # log (default, every profile): mail is written to the application
+    # log. smtp: real delivery via SMTP_HOST — select only when a mail
+    # server is actually configured, or sends fail and abort flows.
+    provider: ${MAIL_PROVIDER:log}
     from: ${MAIL_FROM:noreply@unilink.dev}
     host: ${SMTP_HOST:localhost}
   security:

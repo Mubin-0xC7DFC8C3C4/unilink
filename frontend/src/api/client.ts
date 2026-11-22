@@ -40,7 +40,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   catch { throw new ApiError(0, { code:'NETWORK_ERROR', message:'Network error — the server could not be reached. Check your connection and try again.' }); }
   if (res.status===204) return undefined as T;
   const text = await res.text(); let body: ApiErrorBody & Record<string,unknown> = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text }; }
+  try { body = text ? JSON.parse(text) : {}; } catch {
+    // A 2xx with a non-JSON body is not data: the request never reached
+    // the API (e.g. a static host's SPA fallback answered with
+    // index.html). Returning it as data made callers crash on the shape
+    // ((data||[]).map is not a function — the whole app unmounted on the
+    // signup page). Reject instead, so query/mutation error states show.
+    if (res.ok) throw new ApiError(res.status, { code:'INVALID_RESPONSE', message:'The server returned an unreadable response. Please try again.' });
+    body = { message: text };
+  }
   if (!res.ok) { if (res.status===401) redirectOnSessionExpired(path); throw new ApiError(res.status, body as ApiErrorBody, `Request failed (${res.status})`); }
   return body as T;
 }

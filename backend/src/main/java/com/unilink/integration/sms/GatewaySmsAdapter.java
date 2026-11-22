@@ -1,9 +1,11 @@
 package com.unilink.integration.sms;
-import com.unilink.config.AppProperties; import org.slf4j.*; import org.springframework.context.annotation.Profile;
+import com.unilink.config.AppProperties; import org.slf4j.*; import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import java.net.*; import java.net.http.*; import java.nio.charset.StandardCharsets; import java.time.Duration;
-/** Real SMS-gateway adapter. Fails clearly without credentials (Master Guide §1 rule 4). */
-@Component @Profile("prod")
+/** Real SMS-gateway adapter, selected only when a gateway is actually
+ *  configured (SMS_PROVIDER=gateway). Fails clearly without credentials
+ *  (Master Guide §1 rule 4) — but only once it has been selected. */
+@Component @ConditionalOnProperty(prefix="app.sms", name="provider", havingValue="gateway")
 public class GatewaySmsAdapter implements SmsProvider {
   private static final Logger log = LoggerFactory.getLogger(GatewaySmsAdapter.class);
   private final AppProperties props;

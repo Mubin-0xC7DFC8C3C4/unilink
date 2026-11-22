@@ -200,3 +200,22 @@ describe('login no longer swallows its error', () => {
     await waitFor(() => expect(sessionStorage.getItem(SESSION_EXPIRED_KEY)).toBeNull());
   });
 });
+
+describe('api() response-shape guard', () => {
+  it('rejects a 200 whose body is HTML (a static host SPA fallback), instead of returning it as data', async () => {
+    // Production regression: with the Pages /api proxy ineffective, the
+    // catalogue request answered 200 + index.html; api() returned
+    // {message: '<!doctype html>…'} as the "universities array" and the
+    // signup page crashed on (data||[]).map, unmounting the whole app.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><html><body></body></html>', { status: 200, headers: { 'Content-Type': 'text/html' } })));
+    await expect(apiGet('/public/universities')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+  it('still resolves a 200 JSON body as data', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json([{ id: 1, name: 'Metropolitan University' }])));
+    await expect(apiGet('/public/universities')).resolves.toEqual([{ id: 1, name: 'Metropolitan University' }]);
+  });
+  it('still surfaces a plain-text error body as the ApiError message', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })));
+    await expect(apiGet('/public/universities')).rejects.toMatchObject({ status: 500, message: 'boom' });
+  });
+});

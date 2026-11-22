@@ -1,9 +1,11 @@
 package com.unilink.integration.email;
-import com.unilink.config.AppProperties; import org.springframework.context.annotation.Profile;
+import com.unilink.config.AppProperties; import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.mail.SimpleMailMessage; import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Component;
-/** SMTP adapter (prod). Requires SMTP_HOST etc.; fails clearly if the sender is misconfigured. */
-@Component @Profile("prod")
+/** SMTP adapter, selected only when SMTP is actually configured
+ *  (MAIL_PROVIDER=smtp). Requires SMTP_HOST etc.; fails clearly if the
+ *  sender is misconfigured — but only once it has been selected. */
+@Component @ConditionalOnProperty(prefix="app.mail", name="provider", havingValue="smtp")
 public class SmtpEmailAdapter implements EmailProvider {
   private final JavaMailSender sender; private final AppProperties props;
   public SmtpEmailAdapter(JavaMailSender sender, AppProperties props){ this.sender=sender; this.props=props; }
