@@ -1,7 +1,7 @@
 # UniLink on Cloudflare Pages — single-origin routing (see DEPLOY-FREE.md).
 #
 # ACTION REQUIRED before the Pages deploy goes live: replace
-# REPLACE-WITH-RENDER-BACKEND-URL with the real Render backend origin
+# https://unilink-api-243s.onrender.com with the real Render backend origin
 # (e.g. https://unilink-api.onrender.com, no trailing slash). Deploy the
 # backend FIRST, then set this host, commit and push — Pages rebuilds
 # automatically. Until then the API proxy points nowhere.
@@ -9,8 +9,8 @@
 # The browser only ever talks to the Pages origin: /api and /ws are
 # proxied to Render, so session cookies and CSRF keep working exactly as
 # in the single-origin design (no CORS, no cross-site cookies).
-/api/* https://REPLACE-WITH-RENDER-BACKEND-URL/api/:splat 200
-/ws/* https://REPLACE-WITH-RENDER-BACKEND-URL/ws/:splat 200
+/api/* https://unilink-api-243s.onrender.com/api/:splat 200
+/ws/* https://unilink-api-243s.onrender.com/ws/:splat 200
 # Admin portal is a separate Vite entry (admin.html).
 /admin /admin.html 200
 /admin/* /admin.html 200
