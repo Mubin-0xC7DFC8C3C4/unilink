@@ -57,6 +57,7 @@ public class AccountDeletionService {
       throw new Exceptions.BadRequest("INVALID_CREDENTIALS", "Password is incorrect");
     Set<String> keys = new HashSet<>();
     if (u.getIdCardKey()!=null) keys.add(u.getIdCardKey());
+    if (u.getIdCardBackKey()!=null) keys.add(u.getIdCardBackKey());
     if (u.getProfilePhotoKey()!=null) keys.add(u.getProfilePhotoKey());
     // D-155: the profile cover photo was never collected, so its file
     // orphaned in storage after deletion (NFR-PRV-02: the user's images

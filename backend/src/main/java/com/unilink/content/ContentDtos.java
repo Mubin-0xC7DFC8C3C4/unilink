@@ -4,9 +4,9 @@ import java.time.LocalDateTime;
 /** Content DTOs (ARCH: entities never leave the service layer). Components mirror the entity JSON. */
 public final class ContentDtos {
   private ContentDtos(){}
-  public record CommentDto(Long id, Long postId, Long authorId, String body, String status, LocalDateTime createdAt, String authorName){
+  public record CommentDto(Long id, Long postId, Long authorId, Long parentId, String body, String status, LocalDateTime createdAt, String authorName){
     public static CommentDto from(Comment c){ return from(c, null); }
-    public static CommentDto from(Comment c, String authorName){ return new CommentDto(c.getId(), c.getPostId(), c.getAuthorId(), c.getBody(), c.getStatus(), c.getCreatedAt(), authorName); }
+    public static CommentDto from(Comment c, String authorName){ return new CommentDto(c.getId(), c.getPostId(), c.getAuthorId(), c.getParentId(), c.getBody(), c.getStatus(), c.getCreatedAt(), authorName); }
   }
   public record BookmarkDto(Long id, Long userId, String targetType, Long targetId, LocalDateTime createdAt, String title){
     public static BookmarkDto from(Bookmark b){ return from(b, null); }

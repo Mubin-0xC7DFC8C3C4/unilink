@@ -14,7 +14,7 @@ public final class AuthDtos {
     @NotBlank @Email private String email;
     @NotNull private Long universityId; @NotNull private Long departmentId; private Long batchId;
     @NotBlank private String address; @NotBlank private String studentId;
-    @NotBlank private String password; private MultipartFile idCard; private MultipartFile profilePhoto;
+    @NotBlank private String password; private MultipartFile idCard; private MultipartFile idCardBack; private MultipartFile profilePhoto;
     public String getFullName(){return fullName;} public void setFullName(String v){fullName=v;}
     public String getPhone(){return phone;} public void setPhone(String v){phone=v;}
     public String getEmail(){return email;} public void setEmail(String v){email=v;}
@@ -24,7 +24,7 @@ public final class AuthDtos {
     public String getAddress(){return address;} public void setAddress(String v){address=v;}
     public String getStudentId(){return studentId;} public void setStudentId(String v){studentId=v;}
     public String getPassword(){return password;} public void setPassword(String v){password=v;}
-    public MultipartFile getIdCard(){return idCard;} public void setIdCard(MultipartFile v){idCard=v;}
+    public MultipartFile getIdCard(){return idCard;} public void setIdCard(MultipartFile v){idCard=v;} public MultipartFile getIdCardBack(){return idCardBack;} public void setIdCardBack(MultipartFile v){idCardBack=v;}
     public MultipartFile getProfilePhoto(){return profilePhoto;} public void setProfilePhoto(MultipartFile v){profilePhoto=v;}
   }
   public record LoginRequest(@NotBlank @Email String email, @NotBlank String password) {}

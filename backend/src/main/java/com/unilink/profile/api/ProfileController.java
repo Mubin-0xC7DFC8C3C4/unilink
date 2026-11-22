@@ -55,6 +55,21 @@ public class ProfileController {
       .body(new ByteArrayResource(f.bytes()));
   }
   /** Activity feed (FR-PROF-07). */
+  @GetMapping("/{id}/followers") public List<ProfileService.PersonDto> followers(Authentication a, @PathVariable Long id, @RequestParam(defaultValue="50") int limit){
+    var viewer = policy.requireStudent(a.getPrincipal()); return service.followers(id, viewer.userId(), limit);
+  }
+  @GetMapping("/{id}/following") public List<ProfileService.PersonDto> followingList(Authentication a, @PathVariable Long id, @RequestParam(defaultValue="50") int limit){
+    var viewer = policy.requireStudent(a.getPrincipal()); return service.following(id, viewer.userId(), limit);
+  }
+  @GetMapping("/suggestions") public List<ProfileService.PersonDto> suggestions(Authentication a, @RequestParam(defaultValue="10") int limit){
+    var viewer = policy.requireStudent(a.getPrincipal()); return service.suggestions(viewer, limit);
+  }
+  @GetMapping("/me/activity-items") public List<ProfileService.ActivityItemDto> myActivityItems(Authentication a){
+    var viewer = policy.requireStudent(a.getPrincipal()); return service.activityItems(viewer.userId(), viewer);
+  }
+  @GetMapping("/{id}/activity-items") public List<ProfileService.ActivityItemDto> activityItems(Authentication a, @PathVariable Long id){
+    var viewer = policy.requireStudent(a.getPrincipal()); return service.activityItems(id, viewer);
+  }
   @GetMapping("/me/activity") public List<FeedService.PostDto> myActivity(Authentication a){
     var p = policy.requireStudent(a.getPrincipal()); return service.activity(p.userId(), p);
   }

@@ -5,6 +5,7 @@ import jakarta.persistence.*;import lombok.*;import java.time.LocalDateTime;
 public class Comment {
   @Id @GeneratedValue(strategy=GenerationType.IDENTITY) private Long id;
   @Column(name="post_id") private Long postId;
+  @Column(name="parent_id") private Long parentId;
   @Column(name="author_id") private Long authorId;
   @Lob
   @Column(name="body") private String body;

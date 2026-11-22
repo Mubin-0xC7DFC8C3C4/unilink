@@ -4,6 +4,7 @@ import com.unilink.identity.domain.*; import com.unilink.identity.repo.*;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
 import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
+import com.unilink.notification.NotificationService;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
@@ -17,17 +18,18 @@ public class PostService {
   private final AttachmentRepository attachments; private final SectorTagRepository sectors;
   private final AccessPolicy policy; private final ContentValidator validator; private final FeedService feedService;
   private final StorageGateway storage; private final UploadValidator uploads;
+  private final NotificationService notifications;
   public PostService(PostRepository posts, CommentRepository comments, CommentMentionRepository mentions,
       ReactionRepository reactions, BookmarkRepository bookmarks, PostSectorTagRepository postSectors,
       EventDetailRepository events, EventResponseRepository responses, UserRepository users,
       AttachmentRepository attachments, SectorTagRepository sectors,
       AccessPolicy policy, ContentValidator validator, FeedService feedService,
-      StorageGateway storage, UploadValidator uploads){
+      StorageGateway storage, UploadValidator uploads, NotificationService notifications){
     this.posts=posts; this.comments=comments; this.mentions=mentions; this.reactions=reactions; this.bookmarks=bookmarks;
     this.postSectors=postSectors; this.events=events; this.responses=responses; this.users=users;
     this.attachments=attachments; this.sectors=sectors;
     this.policy=policy; this.validator=validator; this.feedService=feedService;
-    this.storage=storage; this.uploads=uploads;
+    this.storage=storage; this.uploads=uploads; this.notifications=notifications;
   }
   /** D-150: sector ids must exist and be deduplicated before any
    *  PostSectorTag row is written. post_sector_tags has an FK to
@@ -64,12 +66,28 @@ public class PostService {
   }
   @Transactional
   public ContentDtos.CommentDto addComment(Principals.UnilinkUserPrincipal p, Long postId, String body, List<Long> mentionUserIds){
+    return addComment(p, postId, body, mentionUserIds, null);
+  }
+  @Transactional
+  public ContentDtos.CommentDto addComment(Principals.UnilinkUserPrincipal p, Long postId, String body, List<Long> mentionUserIds, Long parentId){
     policy.requireVerified(p);
     validator.validate(body, null);
     Post post = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Post"));
     if (!"ACTIVE".equals(post.getStatus())) throw new Exceptions.BadRequest("POST_NOT_ACTIVE","Post is not active");
+    Comment parent = null;
+    if (parentId != null){
+      parent = comments.findById(parentId).orElseThrow(() -> new Exceptions.NotFound("Comment"));
+      if (!parent.getPostId().equals(postId)) throw new Exceptions.BadRequest("INVALID_PARENT","Reply parent belongs to a different post");
+    }
     Comment c = new Comment(); c.setPostId(postId); c.setAuthorId(p.userId()); c.setBody(body); c.setStatus("ACTIVE");
+    c.setParentId(parentId);
     c = comments.save(c);
+    if (parent != null){
+      if (!parent.getAuthorId().equals(p.userId()))
+        notifications.notify(parent.getAuthorId(), "REPLY", "POST", postId, "New reply", authorName(p.userId()) + " replied to your comment");
+    } else if (post.getAuthorId() != null && !post.getAuthorId().equals(p.userId())){
+      notifications.notify(post.getAuthorId(), "COMMENT", "POST", postId, "New comment", authorName(p.userId()) + " commented on your post");
+    }
     if (mentionUserIds!=null) for (Long m : mentionUserIds){ // D-025: mentions reference user id
       if (users.existsById(m)){ CommentMention cm=new CommentMention(); cm.setCommentId(c.getId()); cm.setMentionedUserId(m); mentions.save(cm); }
     }
@@ -92,14 +110,21 @@ public class PostService {
   public void react(Principals.UnilinkUserPrincipal p, String targetType, Long targetId, String reaction){
     policy.requireVerified(p);
     requireReactionTarget(targetType, targetId);
-    // D-140: the reaction value was an unvalidated free string — any value
-    // was persisted with 200. LIKE is the only reaction the product uses
-    // (frontend PostDetail, traceability FR-CNT-02 contract
-    // `POST /reactions?reaction=LIKE`); extend this set if reactions grow.
-    if (!"LIKE".equals(reaction)) throw new Exceptions.BadRequest("INVALID_REACTION","Unknown reaction");
+    // D-140 validated the value against a fixed set; the set grows to the
+    // five product reactions (2026-11-22). One row per user/target — a new
+    // reaction replaces the previous type.
+    if (!Set.of("LIKE","CELEBRATE","INSIGHTFUL","SUPPORT","CURIOUS").contains(reaction))
+      throw new Exceptions.BadRequest("INVALID_REACTION","Unknown reaction");
+    boolean[] created = { false };
     reactions.findByUserIdAndTargetTypeAndTargetId(p.userId(), targetType, targetId).ifPresentOrElse(
       r -> { r.setReaction(reaction); reactions.save(r); },
-      () -> { Reaction r=new Reaction(); r.setUserId(p.userId()); r.setTargetType(targetType); r.setTargetId(targetId); r.setReaction(reaction); reactions.save(r); });
+      () -> { Reaction r=new Reaction(); r.setUserId(p.userId()); r.setTargetType(targetType); r.setTargetId(targetId); r.setReaction(reaction); reactions.save(r); created[0]=true; });
+    if (created[0] && "POST".equals(targetType)){
+      posts.findById(targetId).ifPresent(post -> {
+        if (post.getAuthorId() != null && !post.getAuthorId().equals(p.userId()))
+          notifications.notify(post.getAuthorId(), "REACTION", "POST", targetId, "New reaction", authorName(p.userId()) + " reacted to your post");
+      });
+    }
   }
   /** D-140: a null targetType/targetId used to persist a junk reaction /
    *  bookmark row (nullable columns, 200) or silently no-op the delete.
@@ -152,9 +177,26 @@ public class PostService {
     EventDetail ev = events.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
     if (ev.getDeadline().isBefore(LocalDateTime.now()) || ev.getArchivedAt()!=null)
       throw new Exceptions.BadRequest("EVENT_PAST","This event has ended");
+    String eventStatus = ev.getEventStatus()==null ? "PUBLISHED" : ev.getEventStatus();
+    if ("DRAFT".equals(eventStatus) || "CANCELLED".equals(eventStatus))
+      throw new Exceptions.BadRequest("EVENT_NOT_OPEN","This event is not open for registration");
+    if ("GOING".equals(response)){
+      if (Boolean.TRUE.equals(ev.getRegistrationClosed()))
+        throw new Exceptions.BadRequest("REGISTRATION_CLOSED","Registration is closed for this event");
+      LocalDateTime regDeadline = ev.getRegistrationDeadline()!=null ? ev.getRegistrationDeadline() : ev.getDeadline();
+      if (regDeadline!=null && regDeadline.isBefore(LocalDateTime.now()))
+        throw new Exceptions.BadRequest("REGISTRATION_CLOSED","The registration deadline has passed");
+      if (ev.getMaxParticipants()!=null){
+        boolean alreadyGoing = responses.findByUserIdAndPostId(p.userId(), postId).map(r -> "GOING".equals(r.getResponse())).orElse(false);
+        if (!alreadyGoing && responses.countByPostIdAndResponse(postId, "GOING") >= ev.getMaxParticipants())
+          throw new Exceptions.BadRequest("EVENT_FULL","This event has reached its participant capacity");
+      }
+    }
     responses.findByUserIdAndPostId(p.userId(), postId).ifPresentOrElse(
       r -> { r.setResponse(response); responses.save(r); },
       () -> { EventResponse r=new EventResponse(); r.setUserId(p.userId()); r.setPostId(postId); r.setResponse(response); responses.save(r); });
+    if ("GOING".equals(response))
+      notifications.notify(p.userId(), "REGISTRATION_CONFIRMED", "EVENT", postId, "Registration confirmed", "You are registered for " + (post.getTitle()==null ? "the event" : post.getTitle()));
   }
   // ---- post edit/delete (FR-CNT-02): owner only, non-event posts ----
   @Transactional

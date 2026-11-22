@@ -29,6 +29,8 @@ public class AdminService {
   private final EventDetailRepository eventDetails; private final FeedService feed;
   private final ModerationService moderation; private final EmailProvider email; private final AppProperties props;
   private final IdentityChangeRequestRepository changeRequests;
+  private final PostSectorTagRepository postSectors; private final EventResponseRepository eventResponses;
+  private final com.unilink.notification.NotificationService notifications;
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
       AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
@@ -39,7 +41,9 @@ public class AdminService {
       AdminTotpSecretRepository totpSecrets,
       EventDetailRepository eventDetails, FeedService feed,
       ModerationService moderation, EmailProvider email, AppProperties props,
-      IdentityChangeRequestRepository changeRequests){
+      IdentityChangeRequestRepository changeRequests, PostSectorTagRepository postSectors,
+      EventResponseRepository eventResponses, com.unilink.notification.NotificationService notifications){
+    this.postSectors=postSectors; this.eventResponses=eventResponses; this.notifications=notifications;
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
     this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
@@ -66,6 +70,11 @@ public class AdminService {
       ? count("SELECT COUNT(*) FROM appeals WHERE status='PENDING'")
       : count("SELECT COUNT(*) FROM appeals a JOIN users u ON u.id=a.appellant_id WHERE a.status='PENDING' AND u.university_id="+uni));
     m.put("newUsersToday", count("SELECT COUNT(*) FROM users WHERE DATE(created_at)=CURDATE()" + (uni==null?"":" AND university_id="+uni)));
+    m.put("totalStudents", count("SELECT COUNT(*) FROM users" + (uni==null?"":" WHERE university_id="+uni)));
+    m.put("suspendedStudents", count("SELECT COUNT(*) FROM users WHERE state='SUSPENDED'" + (uni==null?"":" AND university_id="+uni)));
+    m.put("totalPosts", count("SELECT COUNT(*) FROM posts WHERE type='POST' AND status='ACTIVE'" + (uni==null?"":" AND scope_university_id="+uni)));
+    m.put("publishedEvents", count("SELECT COUNT(*) FROM posts p JOIN event_details e ON e.post_id=p.id WHERE p.type='EVENT' AND e.event_status='PUBLISHED' AND p.status='ACTIVE'" + (uni==null?"":" AND p.scope_university_id="+uni)));
+    m.put("upcomingEvents", count("SELECT COUNT(*) FROM posts p JOIN event_details e ON e.post_id=p.id WHERE p.type='EVENT' AND e.event_status='PUBLISHED' AND p.status='ACTIVE' AND e.deadline>NOW()" + (uni==null?"":" AND p.scope_university_id="+uni)));
     return m;
   }
   private long count(String sql){ Long v = jdbc.queryForObject(sql, Long.class); return v==null?0:v; }
@@ -167,6 +176,14 @@ public class AdminService {
     VerificationRequest r = requests.findById(requestId).orElseThrow(() -> new Exceptions.NotFound("Verification request"));
     loadUser(admin, r.getUserId());
     return r.getIdCardKey();
+  }
+  /** ID card BACK image key for a verification request (2026-11-22);
+   *  null when the student did not upload one. Same scope rules. */
+  public String verificationIdCardBackKey(Principals.AdminPrincipal admin, Long requestId){
+    VerificationRequest r = requests.findById(requestId).orElseThrow(() -> new Exceptions.NotFound("Verification request"));
+    User u = users.findById(r.getUserId()).orElseThrow(() -> new Exceptions.NotFound("User"));
+    policy.requireModeratorScopeOr404(admin, u.getUniversityId());
+    return u.getIdCardBackKey();
   }
   /** Suspend/ban/reactivate/revoke/force-reset — reason mandatory, sessions revoked (FR-ADM-04).
    *  FORCE_RESET returns the generated temporary password ONCE in the result
@@ -668,5 +685,148 @@ public class AdminService {
     }
     audit.write(admin.adminId(),"EVENT_MODERATE","EVENT",postId,null,Map.of(),ip);
     return feed.toDto(p);
+  }
+
+  // ---- Admin event management (2026-11-22): events are admin-created only.
+  // The post row carries no student author; created_by_admin_id records the
+  // acting admin and the lifecycle lives on event_details.event_status.
+  public record AdminEventInput(String title, String body, String shortDescription, String visibility,
+      LocalDateTime deadline, LocalDateTime endAt, String timezone, String location, String venueName,
+      String fullAddress, String meetingLink, String eventType, String organizerName, String organizingUnit,
+      String contactInfo, Boolean registrationRequired, LocalDateTime registrationDeadline, String regLink,
+      Integer maxParticipants, List<Long> sectorIds, Long universityId, Long departmentId, String status) {}
+  public record RegistrationDto(Long userId, String fullName, String email, String response, LocalDateTime createdAt) {}
+
+  private EventDetail requireEventDetail(Long postId){
+    Post p = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+    if (!"EVENT".equals(p.getType())) throw new Exceptions.BadRequest("NOT_AN_EVENT","Post is not an event");
+    return eventDetails.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+  }
+  private Post requireEventPost(Principals.AdminPrincipal admin, Long postId){
+    Post p = posts.findById(postId).orElseThrow(() -> new Exceptions.NotFound("Event"));
+    if (!"EVENT".equals(p.getType())) throw new Exceptions.BadRequest("NOT_AN_EVENT","Post is not an event");
+    policy.requireModeratorScopeOr404(admin, p.getScopeUniversityId());
+    return p;
+  }
+  private void applyEventScopes(Post p, AdminEventInput in){
+    String vis = in.visibility()==null ? "NATIONAL" : in.visibility();
+    if (!List.of("DEPARTMENT","UNIVERSITY","DEPARTMENT_HUB","NATIONAL").contains(vis))
+      throw new Exceptions.BadRequest("INVALID_VISIBILITY","Unknown visibility");
+    p.setVisibility(vis);
+    p.setScopeUniversityId(null); p.setScopeDepartmentId(null); p.setScopeCatalogId(null);
+    if ("UNIVERSITY".equals(vis) || "DEPARTMENT".equals(vis) || "DEPARTMENT_HUB".equals(vis)){
+      if (in.universityId()==null) throw new Exceptions.BadRequest("UNIVERSITY_REQUIRED","Choose a university for this visibility");
+      p.setScopeUniversityId(in.universityId());
+    }
+    if ("DEPARTMENT".equals(vis) && in.departmentId()!=null) p.setScopeDepartmentId(in.departmentId());
+    if ("DEPARTMENT_HUB".equals(vis) && in.departmentId()!=null)
+      departments.findById(in.departmentId()).ifPresent(d -> p.setScopeCatalogId(d.getCatalogId()));
+  }
+  private void applyEventFields(EventDetail ev, AdminEventInput in){
+    if (in.deadline()!=null) ev.setDeadline(in.deadline());
+    if (in.endAt()!=null) ev.setEndAt(in.endAt());
+    if (in.timezone()!=null) ev.setTimezone(in.timezone());
+    if (in.location()!=null) ev.setLocation(in.location());
+    if (in.venueName()!=null) ev.setVenueName(in.venueName());
+    if (in.fullAddress()!=null) ev.setFullAddress(in.fullAddress());
+    if (in.meetingLink()!=null) ev.setMeetingLink(in.meetingLink());
+    if (in.eventType()!=null) ev.setEventType(in.eventType());
+    if (in.organizerName()!=null) ev.setOrganizerName(in.organizerName());
+    if (in.organizingUnit()!=null) ev.setOrganizingUnit(in.organizingUnit());
+    if (in.contactInfo()!=null) ev.setContactInfo(in.contactInfo());
+    if (in.shortDescription()!=null) ev.setShortDescription(in.shortDescription());
+    if (in.registrationRequired()!=null) ev.setRegistrationRequired(in.registrationRequired());
+    if (in.registrationDeadline()!=null) ev.setRegistrationDeadline(in.registrationDeadline());
+    if (in.regLink()!=null) ev.setRegLink(in.regLink());
+    if (in.maxParticipants()!=null) ev.setMaxParticipants(in.maxParticipants());
+  }
+  @Transactional
+  public FeedService.PostDto createAdminEvent(Principals.AdminPrincipal admin, AdminEventInput in, String ip){
+    if (in.title()==null || in.title().isBlank()) throw new Exceptions.BadRequest("TITLE_REQUIRED","Event title is required");
+    if (in.body()==null || in.body().isBlank()) throw new Exceptions.BadRequest("DESCRIPTION_REQUIRED","Event description is required");
+    if (in.deadline()==null) throw new Exceptions.BadRequest("DATE_REQUIRED","Event start date and time are required");
+    String status = in.status()==null ? "PUBLISHED" : in.status();
+    if (!List.of("DRAFT","PUBLISHED").contains(status)) throw new Exceptions.BadRequest("INVALID_STATUS","New events start as DRAFT or PUBLISHED");
+    if ("PUBLISHED".equals(status) && !in.deadline().isAfter(LocalDateTime.now()))
+      throw new Exceptions.BadRequest("PAST_DEADLINE","Event start must be in the future to publish");
+    if (in.registrationDeadline()!=null && in.registrationDeadline().isAfter(in.deadline()))
+      throw new Exceptions.BadRequest("INVALID_REGISTRATION_DEADLINE","Registration deadline must be before the event starts");
+    Post p = new Post();
+    p.setAuthorId(null); p.setType("EVENT"); p.setTitle(in.title()); p.setBody(in.body());
+    applyEventScopes(p, in);
+    policy.requireModeratorScopeOr404(admin, p.getScopeUniversityId());
+    p.setStatus("DRAFT".equals(status) ? "DRAFT" : "ACTIVE");
+    p = posts.save(p);
+    EventDetail ev = new EventDetail();
+    ev.setId(p.getId()); ev.setDeadline(in.deadline()); ev.setRegistrationClosed(false);
+    ev.setEventStatus(status); ev.setCreatedByAdminId(admin.adminId());
+    ev.setOrganizerName(in.organizerName()); ev.setLocation(in.location()); ev.setRegLink(in.regLink());
+    applyEventFields(ev, in);
+    eventDetails.save(ev);
+    if (in.sectorIds()!=null) for (Long sid : new java.util.LinkedHashSet<>(in.sectorIds())){
+      if (!sectors.existsById(sid)) throw new Exceptions.NotFound("Sector");
+      PostSectorTag t = new PostSectorTag(); t.setPostId(p.getId()); t.setSectorTagId(sid); postSectors.save(t);
+    }
+    audit.write(admin.adminId(), "DRAFT".equals(status) ? "EVENT_CREATED_DRAFT" : "EVENT_PUBLISHED", "EVENT", p.getId(), null, Map.of(), ip);
+    return feed.toDto(p);
+  }
+  @Transactional
+  public FeedService.PostDto updateAdminEvent(Principals.AdminPrincipal admin, Long id, AdminEventInput in, String ip){
+    Post p = requireEventPost(admin, id);
+    EventDetail ev = requireEventDetail(id);
+    if ("CANCELLED".equals(ev.getEventStatus())) throw new Exceptions.BadRequest("EVENT_CANCELLED","A cancelled event cannot be edited");
+    if (in.title()!=null && !in.title().isBlank()) p.setTitle(in.title());
+    if (in.body()!=null && !in.body().isBlank()) p.setBody(in.body());
+    if (in.visibility()!=null) applyEventScopes(p, in);
+    applyEventFields(ev, in);
+    posts.save(p); eventDetails.save(ev);
+    audit.write(admin.adminId(), "EVENT_UPDATED", "EVENT", id, null, Map.of(), ip);
+    return feed.toDto(p);
+  }
+  @Transactional
+  public FeedService.PostDto publishAdminEvent(Principals.AdminPrincipal admin, Long id, String ip){
+    Post p = requireEventPost(admin, id);
+    EventDetail ev = requireEventDetail(id);
+    if (!"DRAFT".equals(ev.getEventStatus())) throw new Exceptions.BadRequest("NOT_A_DRAFT","Only a draft event can be published");
+    if (ev.getDeadline()==null || !ev.getDeadline().isAfter(LocalDateTime.now()))
+      throw new Exceptions.BadRequest("PAST_DEADLINE","Event start must be in the future to publish");
+    ev.setEventStatus("PUBLISHED"); p.setStatus("ACTIVE");
+    posts.save(p); eventDetails.save(ev);
+    audit.write(admin.adminId(), "EVENT_PUBLISHED", "EVENT", id, null, Map.of(), ip);
+    return feed.toDto(p);
+  }
+  @Transactional
+  public FeedService.PostDto cancelAdminEvent(Principals.AdminPrincipal admin, Long id, String ip){
+    Post p = requireEventPost(admin, id);
+    EventDetail ev = requireEventDetail(id);
+    if ("CANCELLED".equals(ev.getEventStatus())) throw new Exceptions.BadRequest("ALREADY_CANCELLED","Event is already cancelled");
+    ev.setEventStatus("CANCELLED"); p.setStatus("CANCELLED");
+    posts.save(p); eventDetails.save(ev);
+    for (EventResponse r : eventResponses.findByPostIdOrderByCreatedAtAsc(id))
+      notifications.notify(r.getUserId(), "EVENT_CANCELLED", "EVENT", id, "Event cancelled", (p.getTitle()==null ? "An event" : p.getTitle()) + " has been cancelled");
+    audit.write(admin.adminId(), "EVENT_CANCELLED", "EVENT", id, null, Map.of(), ip);
+    return feed.toDto(p);
+  }
+  @Transactional
+  public void deleteAdminEvent(Principals.AdminPrincipal admin, Long id, String ip){
+    Post p = requireEventPost(admin, id);
+    requireEventDetail(id);
+    p.setStatus("REMOVED"); posts.save(p);
+    audit.write(admin.adminId(), "EVENT_DELETED", "EVENT", id, null, Map.of(), ip);
+  }
+  @Transactional(readOnly=true)
+  public FeedService.PostDto getAdminEvent(Principals.AdminPrincipal admin, Long id){
+    Post p = requireEventPost(admin, id);
+    requireEventDetail(id);
+    return feed.toDto(p);
+  }
+  @Transactional(readOnly=true)
+  public List<RegistrationDto> eventRegistrations(Principals.AdminPrincipal admin, Long id){
+    requireEventPost(admin, id);
+    requireEventDetail(id);
+    return eventResponses.findByPostIdOrderByCreatedAtAsc(id).stream().map(r -> {
+      User u = users.findById(r.getUserId()).orElse(null);
+      return new RegistrationDto(r.getUserId(), u==null?null:u.getFullName(), u==null?null:u.getEmail(), r.getResponse(), r.getCreatedAt());
+    }).toList();
   }
 }

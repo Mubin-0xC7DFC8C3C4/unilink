@@ -118,6 +118,9 @@ public class SecurityConfig {
         .requestMatchers("/api/auth/**","/api/public/**","/api/csrf","/api/health","/api/appeals/public").permitAll()
         .requestMatchers("/actuator/health","/actuator/info").permitAll()
         .requestMatchers("/v3/api-docs/**","/swagger-ui/**","/swagger-ui.html").permitAll()
+        // GitHub OAuth callback: GitHub's redirect carries no session; the
+        // HMAC-signed state parameter binds the exchange to the student.
+        .requestMatchers("/api/workspace/github/callback").permitAll()
         .anyRequest().authenticated())
       .exceptionHandling(e -> e.authenticationEntryPoint((req,res,ex)->ApiErrorWriter.write(res, 401, "UNAUTHORIZED", "Authentication required", req.getRequestURI()))
         .accessDeniedHandler((req,res,ex)->ApiErrorWriter.write(res, 403, "FORBIDDEN", "Access denied", req.getRequestURI())));

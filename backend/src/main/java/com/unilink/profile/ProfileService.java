@@ -5,6 +5,7 @@ import com.unilink.identity.repo.*; import com.unilink.security.AccessPolicy; im
 import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
 import org.springframework.data.domain.PageRequest;
+import java.time.LocalDateTime;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.util.*;
@@ -23,13 +24,16 @@ public class ProfileService {
   private final PostRepository posts; private final FeedService feed;
   private final UniversityRepository universities; private final DepartmentRepository departments; private final BatchRepository batches;
   private final StorageGateway storage; private final UploadValidator uploads;
+  private final CommentRepository profileComments; private final ReactionRepository profileReactions;
+  private final com.unilink.notification.NotificationService profileNotifications;
   public ProfileService(UserRepository users, ProfileRepository profiles, ProjectRepository projects,
       EducationEntryRepository education, AchievementRepository achievements, UserSkillRepository userSkills,
       SkillRepository skills, FollowRepository follows, UserSectorFollowRepository sectorFollows,
       SectorTagRepository sectors, IdentityChangeRequestRepository changeRequests, AccessPolicy policy,
       PostRepository posts, FeedService feed,
       UniversityRepository universities, DepartmentRepository departments, BatchRepository batches,
-      StorageGateway storage, UploadValidator uploads){
+      StorageGateway storage, UploadValidator uploads, CommentRepository profileComments, ReactionRepository profileReactions, com.unilink.notification.NotificationService profileNotifications){
+    this.profileComments=profileComments; this.profileReactions=profileReactions; this.profileNotifications=profileNotifications;
     this.users=users; this.profiles=profiles; this.projects=projects; this.education=education; this.achievements=achievements;
     this.userSkills=userSkills; this.skills=skills; this.follows=follows; this.sectorFollows=sectorFollows;
     this.sectors=sectors; this.changeRequests=changeRequests; this.policy=policy;
@@ -106,6 +110,8 @@ public class ProfileService {
     users.findById(followedId).orElseThrow(() -> new Exceptions.NotFound("User"));
     if (!follows.existsByFollowerIdAndFollowedId(followerId, followedId)){
       Follow f=new Follow(); f.setFollowerId(followerId); f.setFollowedId(followedId); follows.save(f);
+      String followerName = users.findById(followerId).map(User::getFullName).orElse("A student");
+      profileNotifications.notify(followedId, "FOLLOW", "USER", followerId, "New follower", followerName + " started following you");
     }
   }
   @Transactional public void unfollow(Long followerId, Long followedId){ follows.deleteByFollowerIdAndFollowedId(followerId, followedId); }
@@ -236,5 +242,71 @@ public class ProfileService {
       byte[] bytes = storage.open(key).readAllBytes();
       return new PhotoFile(bytes, uploads.sniffContentType(bytes, null));
     } catch (IOException e){ throw new IllegalStateException("Storage unavailable", e); }
+  }
+
+  // ---- people lists, suggestions, unified activity (2026-11-22) ----
+  public record PersonDto(Long userId, String fullName, String department, String university, String batch, boolean followedByViewer) {}
+  private PersonDto toPerson(User u, Long viewerId){
+    String dept = u.getDepartmentId()==null ? null : departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null);
+    String uni = u.getUniversityId()==null ? null : universities.findById(u.getUniversityId()).map(University::getName).orElse(null);
+    String batch = u.getBatchId()==null ? null : batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null);
+    boolean followed = viewerId!=null && follows.existsByFollowerIdAndFollowedId(viewerId, u.getId());
+    return new PersonDto(u.getId(), u.getFullName(), dept, uni, batch, followed);
+  }
+  @Transactional(readOnly=true)
+  public List<PersonDto> followers(Long userId, Long viewerId, int limit){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    return follows.findByFollowedIdOrderByCreatedAtDesc(userId, PageRequest.of(0, Math.min(Math.max(limit,1),50))).stream()
+      .map(f -> users.findById(f.getFollowerId()).orElse(null)).filter(java.util.Objects::nonNull)
+      .map(u -> toPerson(u, viewerId)).toList();
+  }
+  @Transactional(readOnly=true)
+  public List<PersonDto> following(Long userId, Long viewerId, int limit){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    return follows.findByFollowerIdOrderByCreatedAtDesc(userId, PageRequest.of(0, Math.min(Math.max(limit,1),50))).stream()
+      .map(f -> users.findById(f.getFollowedId()).orElse(null)).filter(java.util.Objects::nonNull)
+      .map(u -> toPerson(u, viewerId)).toList();
+  }
+  /** Suggestions: verified students from the viewer's department first,
+   *  then university, excluding self and already-followed accounts. */
+  @Transactional(readOnly=true)
+  public List<PersonDto> suggestions(Principals.UnilinkUserPrincipal viewer, int limit){
+    User me = users.findById(viewer.userId()).orElseThrow(() -> new Exceptions.NotFound("User"));
+    java.util.Set<Long> excluded = new java.util.HashSet<>();
+    excluded.add(viewer.userId());
+    follows.findByFollowerId(viewer.userId()).forEach(f -> excluded.add(f.getFollowedId()));
+    List<User> pool = users.findAll().stream()
+      .filter(u -> "VERIFIED".equals(u.getState())).filter(u -> !excluded.contains(u.getId())).toList();
+    pool = new java.util.ArrayList<>(pool);
+    pool.sort((a, b) -> Integer.compare(personScore(b, me), personScore(a, me)));
+    return pool.stream().limit(Math.min(Math.max(limit,1),50)).map(u -> toPerson(u, viewer.userId())).toList();
+  }
+  private int personScore(User candidate, User me){
+    int score = 0;
+    if (me.getDepartmentId()!=null && me.getDepartmentId().equals(candidate.getDepartmentId())) score += 2;
+    if (me.getUniversityId()!=null && me.getUniversityId().equals(candidate.getUniversityId())) score += 1;
+    return score;
+  }
+  public record ActivityItemDto(String kind, Long postId, String postTitle, String text, String reaction, LocalDateTime createdAt) {}
+  /** Unified activity for the profile page: posts, comments and reactions
+   *  in one chronological stream (the posts-only list stays at
+   *  /activity for compatibility). */
+  @Transactional(readOnly=true)
+  public List<ActivityItemDto> activityItems(Long userId, Principals.UnilinkUserPrincipal viewer){
+    users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    List<ActivityItemDto> items = new java.util.ArrayList<>();
+    posts.findByAuthorIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 20)).stream()
+      .filter(p -> "ACTIVE".equals(p.getStatus())).filter(p -> visibleTo(p, viewer))
+      .forEach(p -> items.add(new ActivityItemDto("post", p.getId(), p.getTitle(), null, null, p.getCreatedAt())));
+    profileComments.findByAuthorIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 20)).stream()
+      .filter(c -> "ACTIVE".equals(c.getStatus()))
+      .forEach(c -> posts.findById(c.getPostId()).filter(p -> visibleTo(p, viewer)).ifPresent(p ->
+        items.add(new ActivityItemDto("comment", p.getId(), p.getTitle(), c.getBody(), null, c.getCreatedAt()))));
+    profileReactions.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 20)).stream()
+      .filter(r -> "POST".equals(r.getTargetType()))
+      .forEach(r -> posts.findById(r.getTargetId()).filter(p -> "ACTIVE".equals(p.getStatus())).filter(p -> visibleTo(p, viewer)).ifPresent(p ->
+        items.add(new ActivityItemDto("reaction", p.getId(), p.getTitle(), null, r.getReaction(), r.getCreatedAt()))));
+    items.sort((a, b) -> b.createdAt().compareTo(a.createdAt()));
+    return items.stream().limit(30).toList();
   }
 }

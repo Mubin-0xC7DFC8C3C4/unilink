@@ -19,6 +19,7 @@ public class User {
   @Column(name="email_verified_at") private LocalDateTime emailVerifiedAt;
   @Column(name="profile_photo_key") private String profilePhotoKey;
   @Column(name="id_card_key") private String idCardKey;
+  @Column(name="id_card_back_key") private String idCardBackKey;
   @Column(name="created_at") private LocalDateTime createdAt;
   @Column(name="updated_at") private LocalDateTime updatedAt;
   // D-157: same NULL-to-NOT-NULL class as AdminAccount (V002 updated_at):

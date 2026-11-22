@@ -74,12 +74,21 @@ public class AuthService {
     String idType = uploads.validateImage(idBytes, UploadValidator.ID_CARD_MAX, form.getIdCard().getContentType());
     String photoType = uploads.validateImage(photoBytes, UploadValidator.PHOTO_MAX, form.getProfilePhoto().getContentType());
     String idKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCard().getOriginalFilename()), idType, ExifStripper.strip(idBytes));
+    // ID card back (2026-11-22): optional second image, validated and
+    // stored privately exactly like the front; older clients that send
+    // only the front keep working.
+    String idBackKey = null;
+    if (form.getIdCardBack()!=null && !form.getIdCardBack().isEmpty()){
+      byte[] backBytes = bytes(form.getIdCardBack());
+      String backType = uploads.validateImage(backBytes, UploadValidator.ID_CARD_MAX, form.getIdCardBack().getContentType());
+      idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCardBack().getOriginalFilename()), backType, ExifStripper.strip(backBytes));
+    }
     String photoKey = storage.store("profile-photos", UploadValidator.sanitizeFileName(form.getProfilePhoto().getOriginalFilename()), photoType, ExifStripper.strip(photoBytes));
     User u = new User();
     u.setUniversityId(uni.getId()); u.setDepartmentId(dept.getId()); u.setBatchId(batchId);
     u.setFullName(form.getFullName()); u.setEmail(form.getEmail()); u.setPhone(form.getPhone());
     u.setAddress(form.getAddress()); u.setStudentId(form.getStudentId());
-    u.setState(AccountState.REGISTERED.name()); u.setIdCardKey(idKey); u.setProfilePhotoKey(photoKey);
+    u.setState(AccountState.REGISTERED.name()); u.setIdCardKey(idKey); u.setIdCardBackKey(idBackKey); u.setProfilePhotoKey(photoKey);
     u = users.save(u);
     UserCredential c = new UserCredential(); c.setId(u.getId()); c.setPasswordHash(encoder.encode(form.getPassword())); creds.save(c);
     Profile p = new Profile(); p.setId(u.getId()); p.setPhoneVisible(false); profiles.save(p);

@@ -9,4 +9,5 @@ import java.time.LocalDateTime;
 public interface EventResponseRepository extends JpaRepository<EventResponse, Long> {
   Optional<EventResponse> findByUserIdAndPostId(Long userId, Long postId);
   long countByPostIdAndResponse(Long postId, String response);
+  List<EventResponse> findByPostIdOrderByCreatedAtAsc(Long postId);
 }

@@ -21,7 +21,7 @@ public class PostController {
   public record UpdatePost(String title, String body, String visibility, List<Long> sectorIds) {}
   public record UpdateEvent(String title, String body, LocalDateTime deadline, String regLink, String location, String visibility) {}
   public record TeamRequestBody(String name, Integer maxSize) {}
-  public record CommentBody(String body, List<Long> mentionUserIds) {}
+  public record CommentBody(String body, List<Long> mentionUserIds, Long parentId) {}
   public record ReactionBody(String reaction) {}
   public record TargetBody(String targetType, Long targetId) {}
   @PostMapping("/posts") public FeedService.PostDto create(Authentication a, @RequestBody CreatePost r){
@@ -66,7 +66,7 @@ public class PostController {
       .body(new InputStreamResource(storage.open(f.storageKey())));
   }
   @PostMapping("/posts/{id}/comments") public ContentDtos.CommentDto comment(Authentication a, @PathVariable Long id, @RequestBody CommentBody r){
-    var p = policy.requireStudent(a.getPrincipal()); return posts.addComment(p, id, r.body(), r.mentionUserIds());
+    var p = policy.requireStudent(a.getPrincipal()); return posts.addComment(p, id, r.body(), r.mentionUserIds(), r.parentId());
   }
   @GetMapping("/posts/{id}/comments") public List<ContentDtos.CommentDto> comments(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); return posts.listComments(id, p);
@@ -86,9 +86,13 @@ public class PostController {
   @GetMapping("/bookmarks") public List<ContentDtos.BookmarkDto> bookmarks(Authentication a){
     var p = policy.requireStudent(a.getPrincipal()); return posts.listBookmarks(p.userId());
   }
+  /** Events are created by administrators only (product rule, 2026-11-22).
+   *  The student event-creation route stays mapped so clients get a clear
+   *  403 instead of a 404, but it never creates anything. Admin creation
+   *  lives at POST /api/admin/events. */
   @PostMapping("/events") public FeedService.PostDto createEvent(Authentication a, @RequestBody CreateEvent r){
-    var p = policy.requireStudent(a.getPrincipal());
-    return posts.createEvent(p, r.visibility(), r.title(), r.body(), r.deadline(), r.regLink(), r.location(), r.sectorIds());
+    policy.requireStudent(a.getPrincipal());
+    throw new com.unilink.common.Exceptions.Forbidden("Events are created by UniLink administrators only");
   }
   /** Event detail (FR-EVT-03). */
   @GetMapping("/events/{id}") public FeedService.PostDto getEvent(Authentication a, @PathVariable Long id){

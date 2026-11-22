@@ -10,4 +10,5 @@ public interface ReactionRepository extends JpaRepository<Reaction, Long> {
   Optional<Reaction> findByUserIdAndTargetTypeAndTargetId(Long userId, String targetType, Long targetId);
   long countByTargetTypeAndTargetId(String targetType, Long targetId);
   void deleteByUserIdAndTargetTypeAndTargetId(Long userId, String targetType, Long targetId);
+  List<Reaction> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 }

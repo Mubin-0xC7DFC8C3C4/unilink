@@ -20,6 +20,11 @@ springdoc:
     enabled: false
 app:
   encryption-key: ${ENCRYPTION_KEY}
+  storage:
+    # Uploaded files must survive restarts/redeploys: an absolute path on a
+    # persistent volume (mounted at /data/unilink/storage in the production
+    # compose stack). Never the container's ephemeral working directory.
+    local-path: ${LOCAL_STORAGE_PATH:/data/unilink/storage}
 logging:
   level:
     com.unilink: INFO

@@ -53,6 +53,11 @@ management:
 app:
   base-url: ${APP_BASE_URL:http://localhost:8080}
   encryption-key: ${ENCRYPTION_KEY:dev-only-encryption-key-change-me}
+  github:
+    client-id: ${GITHUB_CLIENT_ID:}
+    client-secret: ${GITHUB_CLIENT_SECRET:}
+    redirect-uri: ${GITHUB_REDIRECT_URI:http://localhost:8080/api/workspace/github/callback}
+    frontend-url: ${FRONTEND_BASE_URL:http://localhost:5173}
   storage:
     provider: ${STORAGE_PROVIDER:local}
     local-path: ${LOCAL_STORAGE_PATH:./storage-dev}

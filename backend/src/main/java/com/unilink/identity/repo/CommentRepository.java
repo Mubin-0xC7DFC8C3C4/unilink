@@ -13,4 +13,5 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
    *  load per post in every feed page. */
   long countByPostId(Long postId);
   Optional<Comment> findByIdAndAuthorId(Long id, Long authorId);
+  List<Comment> findByAuthorIdOrderByCreatedAtDesc(Long authorId, Pageable pageable);
 }

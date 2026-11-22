@@ -41,6 +41,17 @@ public class AdminController {
   /** ID image: authorised stream only, never a public URL (D-053).
    *  D-106: the content type is sniffed from the stored bytes — the endpoint
    *  used to always answer image/jpeg even for a PNG/WebP ID card. */
+  @GetMapping("/verification/{id}/id-image/back")
+  public ResponseEntity<ByteArrayResource> idImageBack(Authentication a, @PathVariable Long id){
+    String key = admin.verificationIdCardBackKey(admin(a), id);
+    if (key==null || !storage.exists(key)) throw new com.unilink.common.Exceptions.NotFound("ID image (back)");
+    byte[] bytes;
+    try { bytes = storage.open(key).readAllBytes(); }
+    catch (java.io.IOException e){ throw new IllegalStateException("Storage unavailable", e); }
+    return ResponseEntity.ok().contentType(MediaType.parseMediaType(uploads.sniffContentType(bytes, null)))
+      .header("Cache-Control","no-store")
+      .body(new ByteArrayResource(bytes));
+  }
   @GetMapping("/verification/{id}/id-image")
   public ResponseEntity<ByteArrayResource> idImage(Authentication a, @PathVariable Long id){
     String key = admin.verificationIdCardKey(admin(a), id); // enforces moderator scope (404 out of scope)
@@ -102,6 +113,43 @@ public class AdminController {
     return admin.listEventsForModeration(admin(a));
   }
   public record EventModerateBody(String status, java.time.LocalDateTime deadline, String visibility, Boolean registrationClosed) {}
+  public record AdminEventBody(String title, String body, String shortDescription, String visibility,
+      java.time.LocalDateTime deadline, java.time.LocalDateTime endAt, String timezone, String location,
+      String venueName, String fullAddress, String meetingLink, String eventType, String organizerName,
+      String organizingUnit, String contactInfo, Boolean registrationRequired,
+      java.time.LocalDateTime registrationDeadline, String regLink, Integer maxParticipants,
+      java.util.List<Long> sectorIds, Long universityId, Long departmentId, String status) {
+    AdminService.AdminEventInput toInput(){
+      return new AdminService.AdminEventInput(title, body, shortDescription, visibility, deadline, endAt,
+        timezone, location, venueName, fullAddress, meetingLink, eventType, organizerName, organizingUnit,
+        contactInfo, registrationRequired, registrationDeadline, regLink, maxParticipants, sectorIds,
+        universityId, departmentId, status);
+    }
+  }
+  /** Admin event creation (2026-11-22): the ONLY event-creation route.
+   *  Students receive 403 from the security rules on /api/admin/**. */
+  @PostMapping("/events") @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  public com.unilink.community.FeedService.PostDto createEvent(Authentication a, @RequestBody AdminEventBody b, HttpServletRequest req){
+    return admin.createAdminEvent(admin(a), b.toInput(), ip(req));
+  }
+  @GetMapping("/events/{id}") public com.unilink.community.FeedService.PostDto adminEvent(Authentication a, @PathVariable Long id){
+    return admin.getAdminEvent(admin(a), id);
+  }
+  @PutMapping("/events/{id}") public com.unilink.community.FeedService.PostDto updateEvent(Authentication a, @PathVariable Long id, @RequestBody AdminEventBody b, HttpServletRequest req){
+    return admin.updateAdminEvent(admin(a), id, b.toInput(), ip(req));
+  }
+  @PostMapping("/events/{id}/publish") public com.unilink.community.FeedService.PostDto publishEvent(Authentication a, @PathVariable Long id, HttpServletRequest req){
+    return admin.publishAdminEvent(admin(a), id, ip(req));
+  }
+  @PostMapping("/events/{id}/cancel") public com.unilink.community.FeedService.PostDto cancelEvent(Authentication a, @PathVariable Long id, HttpServletRequest req){
+    return admin.cancelAdminEvent(admin(a), id, ip(req));
+  }
+  @DeleteMapping("/events/{id}") public Map<String,String> deleteEvent(Authentication a, @PathVariable Long id, HttpServletRequest req){
+    admin.deleteAdminEvent(admin(a), id, ip(req)); return Map.of("status","ok");
+  }
+  @GetMapping("/events/{id}/registrations") public List<AdminService.RegistrationDto> eventRegistrations(Authentication a, @PathVariable Long id){
+    return admin.eventRegistrations(admin(a), id);
+  }
   @PatchMapping("/events/{id}") public com.unilink.community.FeedService.PostDto moderateEvent(Authentication a, @PathVariable Long id, @RequestBody EventModerateBody b, HttpServletRequest req){
     return admin.moderateEvent(admin(a), id, b.status(), b.deadline(), b.visibility(), b.registrationClosed(), ip(req));
   }

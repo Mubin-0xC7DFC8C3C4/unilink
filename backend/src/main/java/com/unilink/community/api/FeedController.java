@@ -13,11 +13,14 @@ public class FeedController {
       @RequestParam(defaultValue="DEPARTMENT") String level,
       @RequestParam(required=false) String cursor,
       @RequestParam(defaultValue="20") int limit,
-      @RequestParam(required=false) Long sector){
+      @RequestParam(required=false) Long sector,
+      @RequestParam(defaultValue="recent") String sort){
     var p = policy.requireStudent(a.getPrincipal());
     if (!List.of("DEPARTMENT","UNIVERSITY","HUB","NATIONAL").contains(level))
       throw new com.unilink.common.Exceptions.BadRequest("INVALID_LEVEL","Unknown feed level");
-    return feed.feed(p, level, cursor, limit, sector);
+    if (!List.of("recent","top").contains(sort))
+      throw new com.unilink.common.Exceptions.BadRequest("INVALID_SORT","Unknown sort");
+    return feed.feed(p, level, cursor, limit, sector, sort);
   }
   @GetMapping("/api/announcements")
   public List<AnnouncementDto> announcements(Authentication a){

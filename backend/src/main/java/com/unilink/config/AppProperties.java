@@ -11,8 +11,15 @@ public record AppProperties(
   Sms sms,
   Mail mail,
   Security security,
-  @NotBlank String encryptionKey
+  @NotBlank String encryptionKey,
+  Github github
 ) {
+  /** GitHub OAuth (Workspace). Empty client id/secret = integration not
+   *  configured; the API reports that state honestly instead of faking
+   *  a connection. */
+  public record Github(String clientId, String clientSecret, String redirectUri, String frontendUrl) {
+    public boolean configured(){ return clientId!=null && !clientId.isBlank() && clientSecret!=null && !clientSecret.isBlank(); }
+  }
   public record Storage(String provider, String localPath) {}
   public record Ocr(String provider, String dataPath, String languages) {}
   public record Sms(String provider, String apiUrl, String apiKey, String senderId) {}
