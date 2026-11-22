@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from '../app/auth';
-import SettingsPage from '../features/settings/SettingsPage';
+import SettingsModal from '../features/settings/SettingsModal';
+import { ThemeProvider } from '../app/ThemeContext';
 import TeamsPage from '../features/teams/TeamsPage';
 import MessagesPage from '../features/messages/MessagesPage';
 import MasterData from '../admin/pages/MasterData';
 import AdminEvents from '../admin/pages/AdminEvents';
 import Audit from '../admin/pages/Audit';
-import NotificationsPage from '../features/notifications/NotificationsPage';
+
 import PostDetail from '../features/posts/PostDetail';
 import Dashboard from '../admin/pages/Dashboard';
 import Analytics from '../admin/pages/Analytics';
@@ -39,8 +40,8 @@ function qc() { return new QueryClient({ defaultOptions: { queries: { retry: fal
 function renderWithProviders(ui: React.ReactNode, initialEntries: string[] = ['/']) {
   return render(<QueryClientProvider client={qc()}><MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter></QueryClientProvider>);
 }
-function renderWithAuth(ui: React.ReactNode, initialEntries: string[] = ['/']) {
-  return render(<QueryClientProvider client={qc()}><AuthProvider><MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter></AuthProvider></QueryClientProvider>);
+function renderWithShell(ui: React.ReactNode, initialEntries: string[] = ['/']) {
+  return render(<QueryClientProvider client={qc()}><ThemeProvider><AuthProvider><MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter></AuthProvider></ThemeProvider></QueryClientProvider>);
 }
 function jsonBody(call: Call): Record<string, unknown> {
   return JSON.parse(String(call.body)) as Record<string, unknown>;
@@ -71,8 +72,8 @@ describe('Fix 1 — account deletion signs the client out', () => {
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithAuth(<Routes>
-      <Route path="/settings" element={<><Probe /><SettingsPage /></>} />
+    renderWithShell(<Routes>
+      <Route path="/settings" element={<><Probe /><SettingsModal open initialTab="Behavior" onClose={() => {}} /></>} />
       <Route path="/login" element={<><Probe /><div>LOGIN PAGE</div></>} />
     </Routes>, ['/settings']);
     await screen.findByText('SIGNED IN');
@@ -173,6 +174,7 @@ describe('Fix 5 — AdminEvents Hide', () => {
     renderWithProviders(<AdminEvents />);
     await screen.findByText('Fake event');
     await user.click(screen.getByRole('button', { name: 'Hide' }));
+    await user.click(await screen.findByRole('button', { name: 'Hide event' }));
     await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/events/5' && c.method === 'PATCH')).toBe(true));
     const patch = [...calls].reverse().find((c) => c.url === '/api/admin/events/5' && c.method === 'PATCH')!;
     expect(jsonBody(patch)).toEqual({ status: 'HIDE' });
@@ -203,8 +205,7 @@ describe('Fix 7 — notification preferences report per-type status', () => {
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<NotificationsPage />);
-    await screen.findByText('No notifications');
+    renderWithShell(<SettingsModal open initialTab="Notifications" onClose={() => {}} />);
     await user.click(screen.getByRole('button', { name: 'Save preferences' }));
     await screen.findByText('VERIFICATION_DECISION: saved');
     expect(screen.getByText('TEAM_JOIN_ACCEPTED: saved')).toBeTruthy();
@@ -219,8 +220,7 @@ describe('Fix 7 — notification preferences report per-type status', () => {
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<NotificationsPage />);
-    await screen.findByText('No notifications');
+    renderWithShell(<SettingsModal open initialTab="Notifications" onClose={() => {}} />);
     await user.click(screen.getByRole('button', { name: 'Save preferences' }));
     await screen.findByText('Preferences saved.');
     expect(screen.getByText('VERIFICATION_DECISION: saved')).toBeTruthy();
@@ -252,7 +252,7 @@ describe('Fix 8 + 10 — PostDetail mentions and comment authorName', () => {
     expect(jsonBody(lastPost('/api/posts/1/comments')!)).toEqual({ body: '@Ayesha Khan ', mentionUserIds: [9] });
   });
   it('renders authorName from CommentDto and falls back to Student only when absent', async () => {
-    route = (url: string, method: string) => {
+    route = (url: string) => {
       if (url === '/api/posts/1') return json({ id: 1, title: 'Hello', body: 'Body text', authorId: 7, status: 'ACTIVE' });
       if (url === '/api/posts/1/comments') return json([
         { id: 1, body: 'Nice post', authorName: 'Ayesha Khan' },
@@ -276,12 +276,13 @@ describe('Fix 9 — Dashboard / Analytics read the real backend fields', () => {
       return defaultRoute(url);
     };
     renderWithProviders(<Dashboard />);
-    await screen.findByText('Users');
+    await screen.findByText('Verified Students');
     expect(screen.getByText('42')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
     expect(screen.getByText('5')).toBeTruthy();
     expect(screen.getByText('7')).toBeTruthy();
-    expect(screen.getByText(/New users per day:/).textContent).toContain('2');
+    expect(screen.getByText('New Students Today')).toBeTruthy();
+    expect(screen.getByText('2')).toBeTruthy();
   });
   it('analytics renders verificationTurnaroundHours and derives eventCount from eventsPerSector', async () => {
     route = (url) => {
@@ -294,15 +295,16 @@ describe('Fix 9 — Dashboard / Analytics read the real backend fields', () => {
     };
     const { container } = renderWithProviders(<Analytics />);
     await screen.findByText('Active universities');
-    const nums = [...container.querySelectorAll('.stat-num')].map((el) => el.textContent);
-    expect(nums).toEqual(['4', '36', '5']);
-    expect(screen.getByText('hours (average)')).toBeTruthy();
-    expect(screen.getByText(/User growth:/).textContent).toContain('2026-11-16');
+    const nums = [...container.querySelectorAll('.adm-stat-value')].map((el) => el.textContent);
+    expect(nums).toEqual(['4', '36h', '5', '5']);
+    expect(screen.getByText('Average verification turnaround')).toBeTruthy();
+    expect(screen.getByText('AI/ML')).toBeTruthy();
+    expect(container.textContent).not.toContain('{"sector"');
   });
 });
 
 describe('Fix 10 — Feed reads sectors/commentCount/body; SavedPage reads title', () => {
-  it('feed shows sector pills and commentCount from the real fields, never content', async () => {
+  it('feed shows the body and commentCount from the real fields, never content (cards render no sector pills since the 2026-11-21 cleanup)', async () => {
     route = (url) => {
       if (url === '/api/public/sectors') return json([{ id: 7, name: 'AI/ML' }]);
       if (url.startsWith('/api/feed')) return json({ items: [{ id: 1, title: 'Hello', body: 'Real body', content: 'STALE content', authorName: 'Ayesha', sectors: ['AI/ML', 'Data Science'], commentCount: 4 }], nextCursor: null });
@@ -313,8 +315,8 @@ describe('Fix 10 — Feed reads sectors/commentCount/body; SavedPage reads title
     const { container } = renderWithProviders(<Feed />);
     await screen.findByText('Real body');
     expect(screen.queryByText('STALE content')).toBeNull();
-    expect([...container.querySelectorAll('.pill')].map((el) => el.textContent)).toEqual(['AI/ML', 'Data Science']);
-    expect(container.textContent).toContain('· 4 comments');
+    expect(container.querySelectorAll('.pill')).toHaveLength(0);
+    expect(container.textContent).toContain('4 comments');
   });
   it('saved page renders BookmarkDto title, with a fallback only when absent', async () => {
     route = (url) => {
@@ -365,14 +367,17 @@ describe('Verification follow-up — FORCE_RESET shows the temporary password on
   it('shows the temp password returned by the user-action endpoint', async () => {
     route = (url, method) => {
       if (url === '/api/admin/users') return json([{ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' }]);
+      if (url === '/api/admin/users/9') return json({ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' });
       if (url === '/api/admin/users/9/FORCE_RESET' && method === 'POST') return json({ user: { id: 9 }, temporaryPassword: 'a1b2c3d4e5f6A1' });
       return defaultRoute(url);
     };
     const user = userEvent.setup();
     renderWithProviders(<Users />);
     await screen.findByText('Bad Actor');
-    await user.type(screen.getByLabelText('Reason'), 'password reset');
-    await user.click(screen.getByRole('button', { name: 'FORCE_RESET' }));
+    await user.click(screen.getByRole('button', { name: 'View' }));
+    await user.click(await screen.findByRole('button', { name: 'Force password reset' }));
+    await user.type(screen.getByLabelText('Reason (required)'), 'password reset');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(lastPost('/api/admin/users/9/FORCE_RESET')).toBeDefined());
     expect(await screen.findByText(/a1b2c3d4e5f6A1/)).toBeInTheDocument();
     expect(screen.getByText(/shown once/)).toBeInTheDocument();
@@ -383,14 +388,17 @@ describe('Verification follow-up — FORCE_RESET shows the temporary password on
       // Platform Admin in the auth context to render the button.
       if (url === '/api/admin/auth/me') return json({ adminId: 1, email: 'pa@example.com', role: 'PLATFORM_ADMIN', mfaVerified: true });
       if (url === '/api/admin/users') return json([{ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' }]);
+      if (url === '/api/admin/users/9') return json({ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' });
       if (url === '/api/admin/users/9/SUSPEND' && method === 'POST') return json({ user: { id: 9 }, temporaryPassword: null });
       return defaultRoute(url);
     };
     const user = userEvent.setup();
     render(<QueryClientProvider client={qc()}><AuthProvider restorePath="/admin/auth/me"><MemoryRouter><Users /></MemoryRouter></AuthProvider></QueryClientProvider>);
     await screen.findByText('Bad Actor');
-    await user.type(screen.getByLabelText('Reason'), 'spam');
-    await user.click(await screen.findByRole('button', { name: 'SUSPEND' }));
+    await user.click(screen.getByRole('button', { name: 'View' }));
+    await user.click(await screen.findByRole('button', { name: 'Suspend account' }));
+    await user.type(screen.getByLabelText('Reason (required)'), 'spam');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(lastPost('/api/admin/users/9/SUSPEND')).toBeDefined());
     expect(screen.queryByText(/shown once/)).not.toBeInTheDocument();
   });

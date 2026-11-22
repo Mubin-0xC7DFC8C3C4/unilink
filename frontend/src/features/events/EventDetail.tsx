@@ -1,5 +1,6 @@
 import { useState } from 'react'; import { useParams, useNavigate } from 'react-router-dom'; import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiDelete, api, errorMessage } from '../../api/client'; import { Button, PageHeader, Skeleton, ErrorState, ApiUnavailable } from '../../design/primitives'; import type { EventItem } from '../../api/types';
+import { formatEventDateTime, eventVisibilityLabel } from './eventFormat';
 export default function EventDetail(){ const {id}=useParams(); const nav=useNavigate(); const qc=useQueryClient();
   const q = useQuery({ queryKey:['event',id], queryFn: ()=>apiGet<EventItem>(`/events/${id}`), retry:false });
   const me = useQuery({ queryKey:['me'], queryFn: ()=>apiGet<{id:number}>('/auth/me'), retry:false });
@@ -13,7 +14,7 @@ export default function EventDetail(){ const {id}=useParams(); const nav=useNavi
   const edit = useMutation({ mutationFn: ()=>api(`/events/${id}`,{method:'PATCH', body: JSON.stringify({title: title||undefined, body: body||undefined, deadline: deadline?`${deadline}T23:59:59`:undefined, regLink: regLink||undefined, location: location||undefined, visibility: visibility==='HUB'?'DEPARTMENT_HUB':visibility})}), onSuccess: ()=>{ setEditing(false); qc.invalidateQueries({queryKey:['event',id]}); } });
   const startEdit=()=>{ setTitle(q.data?.title||''); setBody(q.data?.body||''); setDeadline((q.data?.eventDeadline||'').slice(0,10)); setRegLink(q.data?.regLink||''); setLocation(q.data?.location||''); setVisibility(q.data?.visibility||'DEPARTMENT'); setEditing(true); };
   return <div className="container">{q.isPending?<Skeleton/>:q.isError?(q.error as any)?.status===404?<ApiUnavailable endpoint={`/events/${id}`} onRetry={()=>q.refetch()}/>:<ErrorState message={errorMessage(q.error)} onRetry={()=>q.refetch()}/>:<><PageHeader eyebrow="Event" title={q.data?.title||'Event'} lead={q.data?.body||''} />
-  <p className="secondary">Deadline: {q.data?.eventDeadline||q.data?.deadline||'Not set'} · Visibility: {q.data?.visibility||'—'}{q.data?.location?` · ${q.data.location}`:''}{q.data?.regLink?<> · <a href={q.data.regLink}>External registration</a></>:null}</p>
+  <p className="secondary">Deadline: {formatEventDateTime(q.data?.eventDeadline||q.data?.deadline)||'Not set'} · Visibility: {eventVisibilityLabel(q.data?.visibility)}{q.data?.location?` · ${q.data.location}`:''}{q.data?.regLink?<> · <a href={q.data.regLink}>External registration</a></>:null}</p>
   <div style={{display:'flex',gap:8,flexWrap:'wrap'}}><Button onClick={()=>rsvp.mutate('INTERESTED')}>Interested</Button><Button variant="primary" onClick={()=>rsvp.mutate('GOING')}>Going</Button><Button onClick={()=>teamReq.mutate()} disabled={teamReq.isPending}>Request a team</Button>
   {isOwner && <><Button onClick={startEdit}>Edit event</Button><Button onClick={()=>{ if(confirm('Delete this event?')) del.mutate(); }} disabled={del.isPending}>Delete event</Button></>}</div>
   {(rsvp.isError||teamReq.isError||del.isError||edit.isError) && <p role="alert" className="field-error">{errorMessage(rsvp.error||teamReq.error||del.error||edit.error)}</p>}

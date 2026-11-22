@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -64,19 +64,24 @@ describe('SignUp (I-6)', () => {
     renderWithProviders(<Routes><Route path="/signup" element={<SignUp />} /><Route path="/otp" element={<div>OTP PAGE</div>} /></Routes>, ['/signup']);
     await user.type(screen.getByLabelText('Full name'), 'Test User');
     await user.type(screen.getByLabelText('Phone'), '01712345678');
-    await user.type(screen.getByLabelText('Email'), 'test@example.com');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
-    await user.selectOptions(screen.getByLabelText('University'), '1');
+    // Phase 2.2: university/department/batch are searchable selectors over
+    // the same catalogue endpoints — pick from the filtered list.
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
     expect(calls.some((c) => c.url === '/api/public/departments?universityId=1')).toBe(true);
-    await screen.findByText('CSE');
-    await user.selectOptions(screen.getByLabelText('Department'), '10');
-    await screen.findByText('45');
-    await user.selectOptions(screen.getByLabelText('Batch'), '100');
+    await user.click(screen.getByLabelText('Department'));
+    await user.click(await screen.findByRole('option', { name: 'CSE' }));
+    await user.click(screen.getByLabelText('Batch'));
+    await user.click(await screen.findByRole('option', { name: '45' }));
     await user.type(screen.getByLabelText('Address'), '123 Test Road, Dhaka');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
-    await user.type(screen.getByLabelText('Password'), 'Password1');
-    await user.upload(screen.getByLabelText('Student ID card image'), new File(['id'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
+    await user.type(screen.getByLabelText('Confirm password'), 'Password1');
+    await user.upload(screen.getByLabelText('Student ID card — Front side'), new File(['front'], 'id-front.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card — Back side'), new File(['back'], 'id-back.jpg', { type: 'image/jpeg' }));
     await user.upload(screen.getByLabelText('Profile photo'), new File(['photo'], 'photo.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
     await screen.findByText('OTP PAGE');
@@ -87,7 +92,11 @@ describe('SignUp (I-6)', () => {
     expect(fd.get('departmentId')).toBe('10');
     expect(fd.get('batchId')).toBe('100');
     expect(fd.get('phone')).toBe('01712345678');
-    expect((fd.get('idCard') as File).name).toBe('id.jpg');
+    // The one-file contract: the FRONT side goes out as idCard; the back
+    // side and the confirm password are never sent (owner decision A1).
+    expect((fd.get('idCard') as File).name).toBe('id-front.jpg');
+    expect(fd.get('idCardBack')).toBeNull();
+    expect(fd.get('confirmPassword')).toBeNull();
     expect(fd.get('idCardImage')).toBeNull();
     expect(sessionStorage.getItem('unilink:otpUserId')).toBe('42');
   });
@@ -97,7 +106,7 @@ describe('SignUp (I-6)', () => {
     renderWithProviders(<Routes><Route path="/signup" element={<SignUp />} /></Routes>, ['/signup']);
     await user.type(screen.getByLabelText('Full name'), 'Test User');
     await user.type(screen.getByLabelText('Phone'), '01234567890');
-    await user.type(screen.getByLabelText('Email'), 'test@example.com');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await screen.findByText('Enter a valid Bangladeshi mobile number, e.g. 01712345678');
     expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
@@ -135,31 +144,71 @@ describe('OtpStep (I-5)', () => {
   });
 });
 
-describe('ForgotPassword (I-5)', () => {
-  it('uses request then confirm — no separate verify step', async () => {
-    route = (url, method) => {
-      if (url === '/api/auth/password-reset/request' && method === 'POST') return json({ status: 'If the email exists, a reset code was sent' });
-      if (url === '/api/auth/password-reset/confirm' && method === 'POST') return json({ status: 'Password changed. Please log in again.' });
-      return defaultRoute(url);
-    };
-    const user = userEvent.setup();
+describe('ForgotPassword (I-5, Phase 2.4)', () => {
+  const okRoute = (url: string, method?: string) => {
+    if (url === '/api/auth/password-reset/request' && method === 'POST') return json({ status: 'If the email exists, a reset code was sent' });
+    if (url === '/api/auth/password-reset/confirm' && method === 'POST') return json({ status: 'Password changed. Please log in again.' });
+    return defaultRoute(url);
+  };
+  async function toPasswordStep(user: ReturnType<typeof userEvent.setup>) {
     renderWithProviders(<Routes><Route path="/forgot-password" element={<ForgotPassword />} /></Routes>, ['/forgot-password']);
-    await user.type(screen.getByLabelText('Email'), 'test@example.com');
-    await user.click(screen.getByRole('button', { name: 'Send reset code' }));
-    await screen.findByLabelText('Reset code');
-    await user.type(screen.getByLabelText('Reset code'), '123456');
-    await user.type(screen.getByLabelText(/New password/), 'short');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: 'Send verification code' }));
+    await screen.findByText('Enter verification code');
+    expect(screen.getByText(/t•••@example\.com/)).toBeInTheDocument();
+    const boxes = screen.getAllByRole('textbox');
+    expect(boxes).toHaveLength(6);
+    for (let i = 0; i < 6; i++) await user.type(boxes[i], '123456'[i]);
+    await user.click(screen.getByRole('button', { name: 'Verify code' }));
+    await screen.findByText('Set a new password');
+  }
+
+  it('uses request then confirm — the code step itself makes no API call', async () => {
+    route = okRoute;
+    const user = userEvent.setup();
+    await toPasswordStep(user);
+    // "Verify code" advanced locally: still only the request call exists.
+    expect(calls.filter((c) => c.url.startsWith('/api/auth/password-reset'))).toHaveLength(1);
+    await user.type(screen.getByLabelText('New password'), 'short');
     await user.click(screen.getByRole('button', { name: 'Reset password' }));
-    await screen.findByText(/at least 8 characters/);
+    await screen.findByText('Password must be at least 8 characters with an upper-case letter, a lower-case letter and a digit.');
     expect(calls.some((c) => c.url === '/api/auth/password-reset/confirm')).toBe(false);
-    await user.clear(screen.getByLabelText(/New password/));
-    await user.type(screen.getByLabelText(/New password/), 'Password1');
+    await user.clear(screen.getByLabelText('New password'));
+    await user.type(screen.getByLabelText('New password'), 'Password1');
+    await user.type(screen.getByLabelText('Confirm new password'), 'Password1');
     await user.click(screen.getByRole('button', { name: 'Reset password' }));
-    await screen.findByText(/Your password has been reset/);
+    await screen.findByText('Password updated!');
     const req = calls.find((c) => c.url === '/api/auth/password-reset/request');
     expect(jsonBody(req!)).toEqual({ email: 'test@example.com' });
     const confirm = calls.find((c) => c.url === '/api/auth/password-reset/confirm');
     expect(jsonBody(confirm!)).toEqual({ email: 'test@example.com', otp: '123456', newPassword: 'Password1' });
+  });
+
+  it('returns to the code step with the invalid-code state when confirm rejects the code', async () => {
+    route = (url, method) => {
+      if (url === '/api/auth/password-reset/confirm' && method === 'POST') return json({ code: 'OTP_INVALID', message: 'Incorrect code' }, 400);
+      return okRoute(url, method);
+    };
+    const user = userEvent.setup();
+    await toPasswordStep(user);
+    await user.type(screen.getByLabelText('New password'), 'Password1');
+    await user.type(screen.getByLabelText('Confirm new password'), 'Password1');
+    await user.click(screen.getByRole('button', { name: 'Reset password' }));
+    expect(await screen.findByText('Invalid verification code. Please double-check and try again.')).toBeInTheDocument();
+    for (const b of screen.getAllByRole('textbox')) expect((b as HTMLInputElement).value).toBe('');
+  });
+
+  it('shows the expired state on the code step when confirm reports OTP_EXPIRED', async () => {
+    route = (url, method) => {
+      if (url === '/api/auth/password-reset/confirm' && method === 'POST') return json({ code: 'OTP_EXPIRED', message: 'Reset code has expired.' }, 400);
+      return okRoute(url, method);
+    };
+    const user = userEvent.setup();
+    await toPasswordStep(user);
+    await user.type(screen.getByLabelText('New password'), 'Password1');
+    await user.type(screen.getByLabelText('Confirm new password'), 'Password1');
+    await user.click(screen.getByRole('button', { name: 'Reset password' }));
+    expect(await screen.findByText('Reset code has expired.')).toBeInTheDocument();
   });
 });
 
@@ -184,13 +233,31 @@ describe('Admin login + TOTP (I-4)', () => {
     };
     const user = userEvent.setup();
     renderWithProviders(<Routes><Route path="/admin/login" element={<AdminLogin />} /><Route path="/admin/totp" element={<Totp />} /></Routes>, ['/admin/login']);
-    await user.type(screen.getByLabelText('Email'), 'admin@x.com');
+    await user.type(screen.getByLabelText('Admin email or ID'), 'admin@x.com');
     await user.type(screen.getByLabelText('Password'), 'AdminPassword123');
-    await user.click(screen.getByRole('button', { name: 'Log in' }));
+    await user.click(screen.getByRole('button', { name: 'Sign in to Console' }));
     await screen.findByText('TOTP verification');
     expect(screen.getByText(/otpauth:\/\/totp\/UniLink:admin/)).toBeInTheDocument();
     const login = calls.find((c) => c.url === '/api/admin/auth/login');
     expect(jsonBody(login!)).toEqual({ email: 'admin@x.com', password: 'AdminPassword123' });
+  });
+  it('shows the uniform invalid-credentials message on a 401 and renders the portal chrome (Phase 2.5)', async () => {
+    route = (url, method) => {
+      if (url === '/api/admin/auth/login' && method === 'POST') return json({ code: 'INVALID_CREDENTIALS', message: 'Email or password is incorrect' }, 401);
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderWithProviders(<Routes><Route path="/admin/login" element={<AdminLogin />} /></Routes>, ['/admin/login']);
+    expect(screen.getByText('ADMIN PORTAL')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Student Site' })).toHaveAttribute('href', '/');
+    expect(screen.getByText('Sign in to Admin Console')).toBeInTheDocument();
+    expect(screen.getByText('Forgot credentials? Contact system administrator.')).toBeInTheDocument();
+    expect(screen.getByText('UniLink Administration · All login attempts are monitored and logged.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /sign up/i })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Admin email or ID'), 'admin@x.com');
+    await user.type(screen.getByLabelText('Password'), 'AdminPassword123');
+    await user.click(screen.getByRole('button', { name: 'Sign in to Console' }));
+    expect(await screen.findByText('Invalid admin credentials. Please verify your email and password.')).toBeInTheDocument();
   });
   it('enrols at /admin/auth/totp/enrol, shows recovery codes once, then verifies', async () => {
     route = (url, method) => {

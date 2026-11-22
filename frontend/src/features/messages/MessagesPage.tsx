@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'; import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react'; import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiDelete, errorMessage } from '../../api/client'; import { StompClient, newIdempotencyKey } from '../../api/stomp'; import { Button, EmptyState, ErrorState, PageHeader, Skeleton } from '../../design/primitives';
 
 type Room = { id: number; publicId: string; type?: string; name?: string; memberIds?: number[]; closed?: boolean };
@@ -93,7 +93,7 @@ export default function MessagesPage(){
   const invite = useMutation({ mutationFn: ()=>apiPost<Room>(`/rooms/${room!.publicId}/invite`,{userId: Number(inviteId)}), onSuccess: (r)=>{ setInviteId(''); setRoom(r); qc.invalidateQueries({queryKey:['rooms']}); } });
   const removeMember = useMutation({ mutationFn: (uid:number)=>apiDelete(`/rooms/${room!.publicId}/members/${uid}`), onSuccess: ()=>qc.invalidateQueries({queryKey:['rooms']}) });
   const closeRoom = useMutation({ mutationFn: ()=>apiPost<Room>(`/rooms/${room!.publicId}/close`,{}), onSuccess: (r)=>{ setRoom(r); qc.invalidateQueries({queryKey:['rooms']}); } });
-  const mitems = Array.isArray(msgs.data) ? msgs.data : (msgs.data as any)?.items ?? [];
+  const mitems = useMemo(() => (Array.isArray(msgs.data) ? msgs.data : (msgs.data as any)?.items ?? []), [msgs.data]);
   // Mark the latest message read once per room (the read endpoint needs its id).
   useEffect(() => {
     if (!room || mitems.length === 0) return;

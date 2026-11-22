@@ -6,7 +6,7 @@ import { apiGet, apiPost, api, errorMessage } from '../../api/client'; import { 
  *  /api/admin/master-data/* endpoints; department-catalog is reference data
  *  with no create endpoint, so that tab stays read-only. */
 const TABS=[['universities','Universities'],['department-catalog','Department catalog'],['departments','Departments'],['batches','Batches'],['sectors','Sectors']] as const;
-export default function MasterData(){ const [tab,setTab]=useState<string>('universities'); const [uniId,setUniId]=useState(''); const qc=useQueryClient();
+export default function MasterData(){ const [tabParam]=useState(()=>new URLSearchParams(window.location.search).get('tab')); const [tab,setTab]=useState<string>(tabParam && ['universities','departments','sectors','batches','department-catalog'].includes(tabParam) ? tabParam : 'universities'); const [uniId,setUniId]=useState(''); const qc=useQueryClient();
   const unis = useQuery({ queryKey:['public-universities'], queryFn: ()=>apiGet<any[]>('/public/universities'), retry:false });
   const catalog = useQuery({ queryKey:['public-catalog'], queryFn: ()=>apiGet<any[]>('/public/department-catalog'), retry:false, enabled: tab==='departments' });
   const depts = useQuery({ queryKey:['public-departments',uniId], queryFn: ()=>apiGet<any[]>(`/public/departments?universityId=${uniId}`), retry:false, enabled: !!uniId && (tab==='batches') });

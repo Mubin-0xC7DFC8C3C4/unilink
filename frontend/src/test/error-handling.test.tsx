@@ -169,7 +169,7 @@ describe('login no longer swallows its error', () => {
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
     renderLogin();
-    await user.type(screen.getByLabelText('Email'), 'a@b.edu');
+    await user.type(screen.getByLabelText('Email address'), 'a@b.edu');
     await user.type(screen.getByLabelText('Password'), 'WrongPassword1');
     await user.click(screen.getByRole('button', { name: 'Log in' }));
     await screen.findByText(/Invalid credentials/);
@@ -193,7 +193,7 @@ describe('login no longer swallows its error', () => {
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
     renderLogin();
-    await user.type(screen.getByLabelText('Email'), 'a@b.edu');
+    await user.type(screen.getByLabelText('Email address'), 'a@b.edu');
     await user.type(screen.getByLabelText('Password'), 'WrongPassword1');
     await user.click(screen.getByRole('button', { name: 'Log in' }));
     await screen.findByText(/Incorrect email or password/);

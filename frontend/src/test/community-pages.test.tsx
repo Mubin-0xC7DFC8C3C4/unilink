@@ -1,0 +1,159 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
+import NetworkPage from '../features/network/NetworkPage';
+import WorkspacePage from '../features/workspace/WorkspacePage';
+import ProfilePage from '../features/profile/ProfilePage';
+import { Routes, Route } from 'react-router-dom';
+import { AuthProvider } from '../app/auth';
+import { within } from '@testing-library/react';
+
+/**
+ * The three views that replaced the Phase 3 placeholders (owner
+ * instruction 2026-11-21): My Network (real team-join request inbox —
+ * UniLink has no follow-request model — plus the API's follower
+ * counts) and the Workspace GitHub connection view.
+ * Same fetch-router harness as community-home.test.tsx.
+ */
+type Route = (url: string, method?: string) => { status: number; body: unknown } | undefined;
+let route: Route;
+let calls: { url: string; method: string; body?: string }[] = [];
+const json = (body: unknown, status = 200) => ({ status, body });
+const defaultRoute = (url: string) => (url === '/api/csrf' ? json({}) : undefined);
+function jsonBody(call: { body?: string }) { return call.body ? JSON.parse(call.body) : undefined; }
+
+beforeEach(() => {
+  calls = [];
+  route = defaultRoute;
+  vi.stubGlobal('fetch', async (input: any, init?: any) => {
+    const url = String(input).replace(/^.*(?=\/api\/)/, '');
+    const method = init?.method ?? 'GET';
+    calls.push({ url, method, body: typeof init?.body === 'string' ? init.body : undefined });
+    const r = route(url, method) ?? { status: 404, body: { message: 'not mocked' } };
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+  });
+});
+afterEach(() => { vi.unstubAllGlobals(); });
+
+function renderPage(el: React.ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={qc}><MemoryRouter>{el}</MemoryRouter></QueryClientProvider>);
+}
+
+describe('My Network', () => {
+  it('shows team join requests for my teams and decides them through the real contract', async () => {
+    route = (url, method) => {
+      if (url === '/api/profiles/me') return json({ userId: 5, fullName: 'Ayesha Rahman', followers: 96, following: 128 });
+      if (url === '/api/teams') return json([{ id: 1, name: 'Bus Tracker Team', creatorId: 5 }]);
+      if (url === '/api/teams/1/requests') return json([{ id: 9, teamId: 1, userId: 7, status: 'PENDING', message: 'I can help with maps.' }]);
+      if (url === '/api/profiles/7') return json({ fullName: 'Sadia Islam', departmentName: 'CSE', batchLabel: 'Batch 28' });
+      if (url === '/api/teams/requests/9/decide' && method === 'POST') return json({ status: 'ok' });
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderPage(<NetworkPage />);
+    expect(await screen.findByText('Sadia Islam')).toBeInTheDocument();
+    expect(screen.getByText(/wants to join Bus Tracker Team/)).toBeInTheDocument();
+    expect(screen.getAllByText('96').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/teams/requests/9/decide')).toBe(true));
+    expect(jsonBody(calls.find((c) => c.url === '/api/teams/requests/9/decide')!)).toEqual({ accept: true });
+  }, 30_000);
+});
+
+describe('Workspace', () => {
+  it('shows the connect card when disconnected and requests the OAuth URL on Authorize', async () => {
+    route = (url) => {
+      if (url === '/api/workspace/github/status') return json({ configured: true, connected: false, username: null, message: 'Connect your GitHub account to browse your public repositories inside UniLink.' });
+      if (url === '/api/workspace/github/authorize') return json({ url: 'https://github.com/login/oauth/authorize?client_id=test' });
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderPage(<WorkspacePage />);
+    expect(await screen.findByText('GitHub Repository Integration')).toBeInTheDocument();
+    expect(screen.getByText('Not connected')).toBeInTheDocument();
+    expect(screen.getByText(/Read-only access to your/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Overview' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Authorize GitHub' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/workspace/github/authorize')).toBe(true));
+  });
+
+  it('explains the configuration state instead of simulating a connection when GitHub is not configured', async () => {
+    route = (url) => {
+      if (url === '/api/workspace/github/status') return json({ configured: false, connected: false, username: null, message: 'GitHub integration is not configured on this server yet.' });
+      return defaultRoute(url);
+    };
+    renderPage(<WorkspacePage />);
+    expect(await screen.findByText('GitHub integration is not configured on this server yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Authorize GitHub' })).not.toBeInTheDocument();
+  });
+
+  it('lists real repositories when connected and opens the live viewer', async () => {
+    route = (url) => {
+      if (url === '/api/workspace/github/status') return json({ configured: true, connected: true, username: 'ayesha-dev', message: '' });
+      if (url === '/api/workspace/github/repos') return json([{ owner: 'ayesha-dev', name: 'campus-bus-tracker', fullName: 'ayesha-dev/campus-bus-tracker', description: 'Real-time campus bus tracking.', language: 'TypeScript', stars: 48, forks: 9 }]);
+      if (url === '/api/workspace/github/repos/ayesha-dev/campus-bus-tracker') return json({ repo: { owner: 'ayesha-dev', name: 'campus-bus-tracker', fullName: 'ayesha-dev/campus-bus-tracker', description: 'Real-time campus bus tracking.', language: 'TypeScript', stars: 48, forks: 9, htmlUrl: 'https://github.com/ayesha-dev/campus-bus-tracker' }, readme: '# Campus Bus Tracker', myUsername: 'ayesha-dev' });
+      if (url.startsWith('/api/workspace/github/repos/ayesha-dev/campus-bus-tracker/contents')) return json([{ name: 'package.json', path: 'package.json', type: 'file', size: 512 }, { name: 'src', path: 'src', type: 'dir', size: null }]);
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderPage(<WorkspacePage />);
+    expect(await screen.findByText(/Connected as @ayesha-dev/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /campus-bus-tracker/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'View details' }));
+    expect(await screen.findByText(/package\.json/)).toBeInTheDocument();
+    expect(screen.getByText('# Campus Bus Tracker')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '← Back to Workspace' }));
+    expect(await screen.findByText('Your GitHub Workspace')).toBeInTheDocument();
+  });
+});
+
+describe('Student Profile — repository modal and sign out', () => {
+  it('opens the repository viewer from a pinned project and signs out through the confirmation popup', async () => {
+    route = (url, method) => {
+      if (url === '/api/auth/me') return json({ id: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED' });
+      if (url === '/api/auth/logout' && method === 'POST') return json({});
+      if (url === '/api/profiles/me') return json({ userId: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED', departmentName: 'CSE', universityName: 'Metropolitan University', followers: 96, following: 128, skills: [] });
+      if (url === '/api/profiles/me/activity-items') return json([]);
+      if (url === '/api/profiles/5/projects') return json([{ id: 1, title: 'Campus Bus Tracker', description: 'Real-time bus tracking.', url: '' }]);
+      if (url === '/api/profiles/5/education') return json([]);
+      if (url === '/api/profiles/5/achievements') return json([]);
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><AuthProvider><MemoryRouter initialEntries={['/profile/me']}><Routes>
+      <Route path="/profile/:id" element={<ProfilePage />} />
+      <Route path="/login" element={<div>LOGIN PAGE</div>} />
+    </Routes></MemoryRouter></AuthProvider></QueryClientProvider>);
+    // Project card opens the repository viewer inside a modal.
+    await user.click(await screen.findByRole('button', { name: /Campus Bus Tracker/ }));
+    const repoDialog = await screen.findByRole('dialog', { name: /repository/ });
+    expect(within(within(repoDialog).getByRole('table')).getByText('package.json')).toBeInTheDocument();
+    expect(within(repoDialog).getByText('Public')).toBeInTheDocument();
+    // Discussion tab: seeded thread with a Creator reply, @file tag
+    // navigation, and the @ autocomplete in the composer.
+    await user.click(within(repoDialog).getByRole('tab', { name: /Discussion/ }));
+    expect(within(repoDialog).getByText('Creator')).toBeInTheDocument();
+    expect(within(repoDialog).getByText(/does the polling pause/)).toBeInTheDocument();
+    const discBox = within(repoDialog).getByLabelText('Comment on this project');
+    await user.type(discBox, 'Please check @Ma');
+    expect(await within(repoDialog).findByRole('option', { name: /MapTracker\.tsx/ })).toBeInTheDocument();
+    await user.click(within(repoDialog).getByRole('option', { name: /MapTracker\.tsx/ }));
+    expect(discBox).toHaveValue('Please check @src/pages/MapTracker.tsx ');
+    // Clicking a posted @file tag jumps to the Code tab with the file open.
+    await user.click(within(repoDialog).getByRole('button', { name: '@src/App.tsx' }));
+    expect(await within(repoDialog).findByText('src/App.tsx')).toBeInTheDocument();
+    await user.click(within(repoDialog).getByRole('button', { name: 'Close repository viewer' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /repository/ })).not.toBeInTheDocument());
+    // Sign out: section button -> confirmation popup -> /login.
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Sign out of UniLink?' });
+    expect(within(confirm).getByText(/Are you sure you want to sign out/)).toBeInTheDocument();
+    await user.click(within(confirm).getByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByText('LOGIN PAGE')).toBeInTheDocument();
+    expect(calls.some((c) => c.url === '/api/auth/logout' && c.method === 'POST')).toBe(true);
+  });
+});

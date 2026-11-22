@@ -5,12 +5,14 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '../app/auth';
 import Feed from '../features/feed/Feed';
-import EventsPage from '../features/events/EventsPage';
+import AdminEvents from '../admin/pages/AdminEvents';
+import CreateEvent from '../admin/pages/CreateEvent';
 import CalendarPage from '../features/events/CalendarPage';
 import SearchPage from '../features/search/SearchPage';
 import TeamsPage from '../features/teams/TeamsPage';
 import ProfilePage from '../features/profile/ProfilePage';
-import NotificationsPage from '../features/notifications/NotificationsPage';
+import SettingsModal from '../features/settings/SettingsModal';
+import { ThemeProvider } from '../app/ThemeContext';
 import MessagesPage from '../features/messages/MessagesPage';
 import Moderation from '../admin/pages/Moderation';
 import Appeals from '../admin/pages/Appeals';
@@ -19,7 +21,6 @@ import Audit from '../admin/pages/Audit';
 import MasterData from '../admin/pages/MasterData';
 import Moderators from '../admin/pages/Moderators';
 import Announcements from '../admin/pages/Announcements';
-import AdminEvents from '../admin/pages/AdminEvents';
 
 /** Phase 2 contract tests (I-7/I-8/I-9): every corrected frontend call is
  *  asserted against the mocked fetch layer — path, method and payload.
@@ -63,72 +64,60 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('Feed (I-8)', () => {
-  it('sends the sector id (not name) and posts visibility + sectorIds', async () => {
-    route = (url, method) => {
-      if (url === '/api/public/sectors') return json([{ id: 7, name: 'AI/ML' }, { id: 8, name: 'Web Development' }]);
-      if (url.startsWith('/api/feed')) return json({ items: [], nextCursor: null });
-      if (url === '/api/community/context') return json({ universityName: 'Metropolitan University', departmentName: 'CSE' });
-      if (url === '/api/profiles/me') return json({ sectors: [] });
-      if (url === '/api/posts' && method === 'POST') return json({ id: 1 }, 201);
-      return defaultRoute(url);
-    };
+  // Reference design (owner, 2026-11-20): Community Home carries no level
+  // tabs and no sector dropdown — the feed is the department level by
+  // default (FR-COM-07) and the composer posts at that level. The two
+  // pre-redesign tests that drove the removed switcher are replaced by
+  // these composer-contract tests against the same endpoints.
+  const feedRoute = (url: string, method?: string) => {
+    if (url.startsWith('/api/feed')) return json({ items: [], nextCursor: null });
+    if (url === '/api/community/context') return json({ universityName: 'Metropolitan University', departmentName: 'CSE' });
+    if (url === '/api/profiles/me') return json({ sectors: [] });
+    if (url === '/api/public/sectors') return json([{ id: 7, name: 'AI/ML' }]);
+    if (url === '/api/bookmarks') return json([]);
+    if (url === '/api/events/upcoming') return json([]);
+    if (url === '/api/posts' && method === 'POST') return json({ id: 1 }, 201);
+    return defaultRoute(url);
+  };
+  it('reads the department feed and posts visibility + sectorIds via the composer modal', async () => {
+    route = feedRoute;
     const user = userEvent.setup();
     renderWithProviders(<Feed />);
-    // Wait for the fetched sectors (the fallback SECTORS list also contains
-    // 'AI/ML', so waiting on the text alone would match the fallback).
-    await waitFor(() => expect((screen.getByLabelText('Sector') as HTMLSelectElement).options[1]?.value).toBe('7'));
-    await user.selectOptions(screen.getByLabelText('Sector'), '7');
-    await waitFor(() => expect(calls.some((c) => c.url === '/api/feed?level=DEPARTMENT&sector=7')).toBe(true));
-    expect(calls.some((c) => c.url.includes('sector=AI'))).toBe(false);
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/feed?level=DEPARTMENT&sort=recent')).toBe(true));
+    await user.click(screen.getByRole('button', { name: 'Start a post' }));
+    expect(await screen.findByRole('dialog', { name: 'Create a post' })).toBeInTheDocument();
     await user.type(screen.getByLabelText('Post title'), 'Hello');
     await user.type(screen.getByLabelText('Post body'), 'World');
     await user.click(screen.getByRole('button', { name: 'Post' }));
     await waitFor(() => expect(lastPost('/api/posts')).toBeDefined());
     const body = jsonBody(lastPost('/api/posts')!);
-    expect(body).toEqual({ title: 'Hello', body: 'World', visibility: 'DEPARTMENT', sectorIds: [7] });
+    expect(body).toEqual({ title: 'Hello', body: 'World', visibility: 'DEPARTMENT', sectorIds: [] });
     expect(body).not.toHaveProperty('level');
     expect(body).not.toHaveProperty('sector');
-  });
-  it('maps HUB to DEPARTMENT_HUB when creating a post', async () => {
-    route = (url, method) => {
-      if (url === '/api/public/sectors') return json([{ id: 7, name: 'AI/ML' }]);
-      if (url.startsWith('/api/feed')) return json({ items: [], nextCursor: null });
-      if (url === '/api/community/context') return json({});
-      if (url === '/api/profiles/me') return json({ sectors: [] });
-      if (url === '/api/posts' && method === 'POST') return json({ id: 1 }, 201);
-      return defaultRoute(url);
-    };
-    const user = userEvent.setup();
-    renderWithProviders(<Feed />);
-    await waitFor(() => expect((screen.getByLabelText('Sector') as HTMLSelectElement).options[1]?.value).toBe('7'));
-    await user.click(screen.getByRole('tab', { name: 'National Department Hub' }));
-    await user.type(screen.getByLabelText('Post title'), 'Hub post');
-    await user.type(screen.getByLabelText('Post body'), 'Body');
-    await user.click(screen.getByRole('button', { name: 'Post' }));
-    await waitFor(() => expect(lastPost('/api/posts')).toBeDefined());
-    expect(jsonBody(lastPost('/api/posts')!).visibility).toBe('DEPARTMENT_HUB');
   });
 });
 
 describe('EventsPage + CalendarPage (I-8)', () => {
-  it('creates an event with body and no type, deadline as end-of-day LocalDateTime', async () => {
+  it('creates an event from the Admin Portal with body and no type, deadline as a LocalDateTime', async () => {
     route = (url, method) => {
       if (url === '/api/events/upcoming') return json([]);
-      if (url === '/api/events' && method === 'POST') return json({ id: 5 }, 201);
+      if (url === '/api/admin/events' && method === 'POST') return json({ id: 5 }, 201);
+      if (url === '/api/admin/events') return json([]);
+      if (url === '/api/public/sectors') return json([]);
+      if (url === '/api/public/universities') return json([]);
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<EventsPage />);
-    await screen.findByText('No upcoming events');
-    await user.type(screen.getByLabelText('Title'), 'Hackathon');
-    await user.type(screen.getByLabelText('Description'), 'A weekend hackathon');
-    await user.type(screen.getByLabelText('Deadline'), '2026-12-01');
-    await user.click(screen.getByRole('button', { name: 'Create event' }));
-    await waitFor(() => expect(lastPost('/api/events')).toBeDefined());
-    const body = jsonBody(lastPost('/api/events')!);
+    renderWithProviders(<CreateEvent />);
+    await user.type(screen.getByLabelText('Event Title'), 'Hackathon');
+    await user.type(screen.getByLabelText('Full Description'), 'A weekend hackathon');
+    await user.type(screen.getByLabelText('Start Date'), '2026-12-01');
+    await user.click(screen.getByRole('button', { name: 'Publish Event' }));
+    await waitFor(() => expect(lastPost('/api/admin/events')).toBeDefined());
+    const body = jsonBody(lastPost('/api/admin/events')!);
     expect(body.title).toBe('Hackathon');
     expect(body.body).toBe('A weekend hackathon');
-    expect(body.deadline).toBe('2026-12-01T23:59:59');
+    expect(body.deadline).toBe('2026-12-01T09:00:00');
     expect(body).not.toHaveProperty('type');
   });
   it('calendar sends from/to, not month', async () => {
@@ -136,7 +125,6 @@ describe('EventsPage + CalendarPage (I-8)', () => {
       if (url.startsWith('/api/calendar')) return json([]);
       return defaultRoute(url);
     };
-    const user = userEvent.setup();
     renderWithProviders(<CalendarPage />);
     const month = screen.getByLabelText('Month') as HTMLInputElement;
     // Month inputs don't take typed input reliably in jsdom; a change event
@@ -190,7 +178,7 @@ describe('ProfilePage (I-8)', () => {
   it('follows via POST /profiles/{id}/follow and loads activity', async () => {
     route = (url, method) => {
       if (url === '/api/profiles/9') return json({ id: 9, userId: 9, fullName: 'Ayesha Khan', email: 'a@mu.ac.bd', state: 'VERIFIED', followers: 3, following: 1 });
-      if (url === '/api/profiles/9/activity') return json([{ id: 1, title: 'First post', body: 'hi' }]);
+      if (url === '/api/profiles/9/activity-items') return json([{ kind: 'post', postId: 1, postTitle: 'First post', text: null, reaction: null, createdAt: '2026-11-20T10:00:00' }]);
       if (url === '/api/profiles/9/projects') return json([]);
       if (url === '/api/profiles/9/education') return json([]);
       if (url === '/api/profiles/9/achievements') return json([]);
@@ -200,14 +188,14 @@ describe('ProfilePage (I-8)', () => {
     const user = userEvent.setup();
     renderWithProviders(<Routes><Route path="/profiles/:id" element={<ProfilePage />} /></Routes>, ['/profiles/9']);
     await screen.findByText('Ayesha Khan');
-    expect(calls.some((c) => c.url === '/api/profiles/9/activity')).toBe(true);
+    expect(calls.some((c) => c.url === '/api/profiles/9/activity-items')).toBe(true);
     await screen.findByText('First post');
     await user.click(screen.getByRole('button', { name: 'Follow' }));
     await waitFor(() => expect(lastPost('/api/profiles/9/follow')).toBeDefined());
   });
 });
 
-describe('NotificationsPage (I-8)', () => {
+describe('Notification preferences in the Settings modal (I-8)', () => {
   it('saves one POST /notifications/preferences per real type', async () => {
     route = (url, method) => {
       if (url === '/api/notifications') return json([]);
@@ -215,8 +203,7 @@ describe('NotificationsPage (I-8)', () => {
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<NotificationsPage />);
-    await screen.findByText('No notifications');
+    renderWithProviders(<ThemeProvider><AuthProvider><SettingsModal open initialTab="Notifications" onClose={() => {}} /></AuthProvider></ThemeProvider>);
     await user.click(screen.getByRole('button', { name: 'Save preferences' }));
     await waitFor(() => expect(calls.filter((c) => c.url === '/api/notifications/preferences' && c.method === 'POST').length).toBe(3));
     const types = calls.filter((c) => c.url === '/api/notifications/preferences').map((c) => jsonBody(c).type);
@@ -264,8 +251,9 @@ describe('Admin pages (I-8)', () => {
     const user = userEvent.setup();
     renderWithProviders(<Moderation />);
     await screen.findByText('spam');
-    await user.type(screen.getByLabelText('Reason'), 'confirmed spam');
-    await user.click(screen.getByRole('button', { name: 'HIDE' }));
+    await user.click(screen.getByRole('button', { name: 'Hide content' }));
+    await user.type(screen.getByLabelText('Decision reason (required)'), 'confirmed spam');
+    await user.click(screen.getByRole('button', { name: 'Record decision' }));
     await waitFor(() => expect(lastPost('/api/admin/moderation/decide')).toBeDefined());
     expect(jsonBody(lastPost('/api/admin/moderation/decide')!)).toEqual({ targetType: 'POST', targetId: 3, action: 'HIDE', reason: 'confirmed spam' });
   });
@@ -289,14 +277,17 @@ describe('Admin pages (I-8)', () => {
       // Platform Admin in the auth context to render the button.
       if (url === '/api/admin/auth/me') return json({ adminId: 1, email: 'pa@example.com', role: 'PLATFORM_ADMIN', mfaVerified: true });
       if (url === '/api/admin/users') return json([{ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' }]);
+      if (url === '/api/admin/users/9') return json({ id: 9, fullName: 'Bad Actor', email: 'b@x.edu', state: 'VERIFIED' });
       if (url === '/api/admin/users/9/SUSPEND' && method === 'POST') return json({});
       return defaultRoute(url);
     };
     const user = userEvent.setup();
     render(<QueryClientProvider client={qc()}><MemoryRouter><AuthProvider restorePath="/admin/auth/me"><Users /></AuthProvider></MemoryRouter></QueryClientProvider>);
     await screen.findByText('Bad Actor');
-    await user.type(screen.getByLabelText('Reason'), 'spam');
-    await user.click(await screen.findByRole('button', { name: 'SUSPEND' }));
+    await user.click(screen.getByRole('button', { name: 'View' }));
+    await user.click(await screen.findByRole('button', { name: 'Suspend account' }));
+    await user.type(screen.getByLabelText('Reason (required)'), 'spam');
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(lastPost('/api/admin/users/9/SUSPEND')).toBeDefined());
     expect(calls.some((c) => c.url.includes('/suspend'))).toBe(false);
   });
@@ -359,6 +350,7 @@ describe('Admin pages (I-8)', () => {
     renderWithProviders(<AdminEvents />);
     await screen.findByText('Fake event');
     await user.click(screen.getByRole('button', { name: 'Remove' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove event' }));
     await waitFor(() => expect(calls.some((c) => c.url === '/api/admin/events/5' && c.method === 'PATCH')).toBe(true));
     const patch = [...calls].reverse().find((c) => c.url === '/api/admin/events/5' && c.method === 'PATCH')!;
     expect(jsonBody(patch)).toEqual({ status: 'REMOVE' });

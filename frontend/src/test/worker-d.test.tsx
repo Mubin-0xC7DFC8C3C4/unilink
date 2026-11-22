@@ -83,7 +83,7 @@ describe('I-17 — duplicate-phone badge in the verification queue', () => {
   ];
   beforeEach(() => {
     route = (url) => {
-      if (url === '/api/admin/verification-queue') return json(queue);
+      if (url.startsWith('/api/admin/verification-queue')) return json(queue);
       return undefined;
     };
   });

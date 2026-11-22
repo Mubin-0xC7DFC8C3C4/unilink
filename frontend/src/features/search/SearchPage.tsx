@@ -1,10 +1,13 @@
-import { useState } from 'react'; import { Link } from 'react-router-dom'; import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react'; import { Link, useSearchParams } from 'react-router-dom'; import { useQuery } from '@tanstack/react-query';
 import { apiGet, errorMessage } from '../../api/client'; import { Button, EmptyState, ErrorState, PageHeader, Skeleton } from '../../design/primitives'; import { SECTORS, type SectorTag } from '../../api/types';
 /** The backend returns a Map {posts, users} — not an array. `type` accepts
  *  only all/posts/users, and `sector` is a sector id (it was ignored
  *  server-side before the Phase 2 fix). */
 interface SearchResult { posts?: {id:number;title?:string;body?:string}[]; users?: {id:number;fullName?:string}[] }
-export default function SearchPage(){ const [q,setQ]=useState(''); const [type,setType]=useState(''); const [sector,setSector]=useState(''); const [submitted,setSubmitted]=useState('');
+export default function SearchPage(){ const [params]=useSearchParams(); const paramQ=params.get('q')??''; const [q,setQ]=useState(paramQ); const [type,setType]=useState(''); const [sector,setSector]=useState(''); const [submitted,setSubmitted]=useState(paramQ);
+  // The header's global search bar lands here with ?q= — run the same real
+  // search with it, and follow the parameter if it changes while mounted.
+  useEffect(()=>{ setQ(paramQ); setSubmitted(paramQ); },[paramQ]);
   const sectorsQ = useQuery({ queryKey:['public-sectors'], queryFn: ()=>apiGet<SectorTag[]>('/public/sectors'), retry:false });
   const sectors = sectorsQ.data ?? [];
   const backendType = type==='people' ? 'users' : type==='posts' ? 'posts' : 'all';

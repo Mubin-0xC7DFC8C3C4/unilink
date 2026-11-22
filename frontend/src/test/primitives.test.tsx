@@ -54,7 +54,7 @@ describe('sign-up validation', () => {
   // I-6: the schema now takes catalog ids (universityId/departmentId/batchId
   // as numbers) and a Bangladeshi mobile number — the old free-text
   // university/department/batch shape was the wrong contract.
-  const valid = {fullName:'A B',phone:'01700000000',email:'a@b.edu',universityId:1,departmentId:10,batchId:100,address:'Dhaka',studentId:'1',password:'Strong1pass'};
+  const valid = {fullName:'A B',phone:'01700000000',email:'a@b.edu',universityId:1,departmentId:10,batchId:100,address:'Dhaka',studentId:'1',password:'Strong1pass',confirmPassword:'Strong1pass'};
   it('rejects weak passwords', () => {
     const r = signUpSchema.safeParse({...valid,password:'weak'});
     expect(r.success).toBe(false);

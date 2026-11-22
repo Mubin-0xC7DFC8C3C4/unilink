@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -8,7 +8,7 @@ import { ThemeProvider } from '../app/ThemeContext';
 import { ApiError } from '../api/types';
 import { errorMessage } from '../api/client';
 import Login from '../features/auth/Login';
-import SettingsPage from '../features/settings/SettingsPage';
+import SettingsModal from '../features/settings/SettingsModal';
 import Totp from '../admin/pages/Totp';
 import AdminChangePassword from '../admin/pages/AdminChangePassword';
 
@@ -52,7 +52,7 @@ function jsonBody(call: Call): Record<string, unknown> {
 }
 
 describe('Student login with mustChangePassword (D-094/D-098)', () => {
-  it('redirects to /settings instead of /feed when the flag is set', async () => {
+  it('goes to /feed when the flag is set (the app shell opens the Settings modal on its Security tab from there)', async () => {
     route = (url, method) => {
       if (url === '/api/auth/login' && method === 'POST')
         return json({ id: 5, fullName: 'Test User', email: 't@x.com', state: 'VERIFIED', mustChangePassword: true });
@@ -60,11 +60,10 @@ describe('Student login with mustChangePassword (D-094/D-098)', () => {
     };
     const user = userEvent.setup();
     renderWithProviders(<Routes><Route path="/login" element={<Login />} /><Route path="/feed" element={<div>FEED</div>} /><Route path="/settings" element={<div>SETTINGS</div>} /></Routes>, ['/login']);
-    await user.type(screen.getByLabelText('Email'), 't@x.com');
+    await user.type(screen.getByLabelText('Email address'), 't@x.com');
     await user.type(screen.getByLabelText('Password'), 'TempPass123');
     await user.click(screen.getByRole('button', { name: 'Log in' }));
-    await screen.findByText('SETTINGS');
-    expect(screen.queryByText('FEED')).not.toBeInTheDocument();
+    await screen.findByText('FEED');
   });
 
   it('goes to /feed when the flag is absent', async () => {
@@ -75,14 +74,14 @@ describe('Student login with mustChangePassword (D-094/D-098)', () => {
     };
     const user = userEvent.setup();
     renderWithProviders(<Routes><Route path="/login" element={<Login />} /><Route path="/feed" element={<div>FEED</div>} /><Route path="/settings" element={<div>SETTINGS</div>} /></Routes>, ['/login']);
-    await user.type(screen.getByLabelText('Email'), 't@x.com');
+    await user.type(screen.getByLabelText('Email address'), 't@x.com');
     await user.type(screen.getByLabelText('Password'), 'Student123');
     await user.click(screen.getByRole('button', { name: 'Log in' }));
     await screen.findByText('FEED');
   });
 });
 
-describe('Student change-password screen (D-093/D-098)', () => {
+describe('Student change-password in the Settings modal (D-093/D-098)', () => {
   it('shows the must-change banner and posts old+new to /auth/change-password', async () => {
     route = (url, method) => {
       if (url === '/api/auth/me') return json({ id: 5, fullName: 'Test User', email: 't@x.com', state: 'VERIFIED', mustChangePassword: true });
@@ -90,7 +89,7 @@ describe('Student change-password screen (D-093/D-098)', () => {
       return defaultRoute(url);
     };
     const user = userEvent.setup();
-    renderWithProviders(<Routes><Route path="/settings" element={<SettingsPage />} /><Route path="/login" element={<div>LOGIN PAGE</div>} /></Routes>, ['/settings']);
+    renderWithProviders(<Routes><Route path="/settings" element={<SettingsModal open initialTab="Behavior" onClose={() => {}} />} /><Route path="/login" element={<div>LOGIN PAGE</div>} /></Routes>, ['/settings']);
     await screen.findByText(/You must change your password before continuing/);
     await user.type(screen.getByLabelText('Current password'), 'TempPass123');
     await user.type(screen.getByLabelText('New password'), 'NewStudent1');
