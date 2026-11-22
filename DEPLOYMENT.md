@@ -50,19 +50,25 @@ real users: login and OTP traffic must be encrypted.
 - Files: snapshot the `uploads` volume together with the database backup —
   post attachments and ID images are referenced by database keys.
 
-## Known caveat — fresh database on MySQL 8.0.46
+## Database portability — MySQL 8 and TiDB (D-167)
 
-Verified 2026-11-22: on MySQL **8.0.46**, one statement in the original V001
-seed (departments `INSERT … SELECT … CROSS JOIN … ON DUPLICATE KEY UPDATE
-name=VALUES(name)`) is rejected by the server (error 1064), so a *fresh*
-Flyway initialisation stops at V001 on that exact server version. Existing
-databases that already applied V001 (including the owner's Windows
-development database, on a different MySQL version) are unaffected, and all
-later migrations (V002–V012) apply cleanly on 8.0.46. Before a first
-production initialisation on 8.0.46, ask the project owner to rule on the
-one-line V001 compatibility edit (rewriting that seed as `INSERT IGNORE`),
-which is deliberately not made unilaterally because it changes the checksum
-of an already-applied migration.
+The Flyway chain V001–V013 is portable across MySQL 8 and TiDB Cloud:
+seed upserts use `INSERT IGNORE` (the original `VALUES()` form was
+rejected by MySQL 8.0.46 and is unsupported on TiDB), there are no
+triggers and no FULLTEXT indexes (both unsupported on TiDB; search is
+LIKE-based), and the `utf8mb4_0900_ai_ci` collation used throughout is
+supported by TiDB ≥ 7.4 (TiDB Cloud Starter qualifies). The full chain
+was executed against MySQL 8.0.46 after these changes: 60 tables, seeds
+correct.
+
+**Existing databases:** V001, V004 and V006 changed, so their Flyway
+checksums no longer match a database that already applied them (such as
+the Windows development database). Run Flyway `repair` once against that
+database — or boot the backend once with
+`spring.flyway.validate-on-migrate=false` — before the next migration.
+
+For the zero-cost demo topology (Cloudflare Pages + Render Free + TiDB
+Cloud Starter), follow **DEPLOY-FREE.md** instead of the compose stack.
 
 ## Alternative: managed hosting
 

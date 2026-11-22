@@ -70,10 +70,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   INDEX idx_audit_target (target_type, target_id, created_at),
   CONSTRAINT fk_audit_actor FOREIGN KEY (actor_admin_id) REFERENCES admin_accounts(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
--- D-037 immutability triggers (defence-in-depth; runtime user has DML grants in dev)
-DELIMITER $$
-CREATE TRIGGER trg_audit_no_update BEFORE UPDATE ON audit_logs
-FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'; END$$
-CREATE TRIGGER trg_audit_no_delete BEFORE DELETE ON audit_logs
-FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_logs is append-only'; END$$
-DELIMITER ;
+-- D-037 audit immutability: originally two BEFORE UPDATE/DELETE triggers
+-- that SIGNALled an error (defence-in-depth). Removed for portability
+-- (D-167): TiDB does not support triggers. Append-only is enforced by the
+-- application — AuditService only inserts and AuditLogRepository exposes
+-- no update or delete operation.

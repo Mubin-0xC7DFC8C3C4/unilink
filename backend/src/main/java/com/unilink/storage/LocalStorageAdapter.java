@@ -1,10 +1,14 @@
 package com.unilink.storage;
 import com.unilink.common.Exceptions; import org.slf4j.Logger; import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import java.io.*; import java.nio.file.*; import java.util.UUID;
-/** Private local-volume adapter (dev). Files live under a non-public directory; never served directly. */
+/** Private local-volume adapter (default). Files live under a non-public
+ *  directory; never served directly. Replaced by DatabaseStorageAdapter
+ *  when app.storage.provider=db (D-168). */
 @Component
+@ConditionalOnProperty(name="app.storage.provider", havingValue="local", matchIfMissing=true)
 public class LocalStorageAdapter implements StorageGateway {
   private static final Logger log = LoggerFactory.getLogger(LocalStorageAdapter.class);
   private final Path root;

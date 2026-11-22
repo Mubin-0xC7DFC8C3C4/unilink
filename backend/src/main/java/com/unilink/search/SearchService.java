@@ -2,7 +2,10 @@ package com.unilink.search;
 import com.unilink.common.Exceptions; import com.unilink.security.Principals;
 import org.springframework.jdbc.core.JdbcTemplate; import org.springframework.stereotype.Service;
 import java.util.*;
-/** SearchStrategy over MySQL FULLTEXT (D-028). Sort fields are allow-listed; parameters are bound. */
+/** Search over posts and people. Portability (D-167, supersedes the
+ *  D-028 FULLTEXT plan): matching is LIKE-based so the same queries run on
+ *  MySQL 8 and TiDB (TiDB has no FULLTEXT). The user term is escaped so
+ *  % and _ match literally. Sort fields are allow-listed; parameters are bound. */
 @Service
 public class SearchService {
   private final JdbcTemplate jdbc;
@@ -13,9 +16,10 @@ public class SearchService {
    *  previously accepted by the controller and ignored). */
   public List<PostHit> searchPosts(Principals.UnilinkUserPrincipal p, String q, Long sectorId){
     if (q==null || q.isBlank()) return List.of();
+    String like = "%" + escapeLike(q.trim()) + "%";
     String sql = """
       SELECT id, title, body, visibility FROM posts
-      WHERE status='ACTIVE' AND MATCH(title, body) AGAINST (? IN NATURAL LANGUAGE MODE)
+      WHERE status='ACTIVE' AND (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')
       AND (visibility='NATIONAL'
         OR (scope_university_id=? AND visibility IN ('UNIVERSITY','DEPARTMENT'))
         OR (visibility='DEPARTMENT' AND scope_department_id=?)
@@ -23,14 +27,18 @@ public class SearchService {
       """ + (sectorId==null ? "" : "AND EXISTS (SELECT 1 FROM post_sector_tags pst WHERE pst.post_id=posts.id AND pst.sector_tag_id=?) ") + """
       ORDER BY created_at DESC LIMIT 50""";
     Object[] args = sectorId==null
-      ? new Object[]{ q, p.universityId(), p.departmentId(), p.catalogId() }
-      : new Object[]{ q, p.universityId(), p.departmentId(), p.catalogId(), sectorId };
+      ? new Object[]{ like, like, p.universityId(), p.departmentId(), p.catalogId() }
+      : new Object[]{ like, like, p.universityId(), p.departmentId(), p.catalogId(), sectorId };
     return jdbc.query(sql, (rs,i)-> new PostHit(rs.getLong("id"), rs.getString("title"), rs.getString("body"), rs.getString("visibility")),
       args);
   }
+  private static String escapeLike(String term){
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+  }
   public List<UserHit> searchUsers(String q){
     if (q==null || q.isBlank()) return List.of();
-    return jdbc.query("SELECT id, full_name, university_id, department_id FROM users WHERE state='VERIFIED' AND MATCH(full_name) AGAINST (? IN NATURAL LANGUAGE MODE) LIMIT 50",
-      (rs,i)-> new UserHit(rs.getLong("id"), rs.getString("full_name"), rs.getLong("university_id"), rs.getLong("department_id")), q);
+    String like = "%" + escapeLike(q.trim()) + "%";
+    return jdbc.query("SELECT id, full_name, university_id, department_id FROM users WHERE state='VERIFIED' AND full_name LIKE ? ESCAPE '\\' LIMIT 50",
+      (rs,i)-> new UserHit(rs.getLong("id"), rs.getString("full_name"), rs.getLong("university_id"), rs.getLong("department_id")), like);
   }
 }

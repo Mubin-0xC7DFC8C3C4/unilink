@@ -37,7 +37,8 @@ spring:
     host: ${SMTP_HOST:localhost}
     port: ${SMTP_PORT:1025}
 server:
-  port: 8080
+  # PORT is assigned by the host on PaaS deploys (e.g. Render); 8080 locally.
+  port: ${PORT:8080}
   servlet:
     session:
       cookie:

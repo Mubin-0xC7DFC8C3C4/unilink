@@ -46,30 +46,28 @@ CREATE TABLE IF NOT EXISTS system_settings (
   description VARCHAR(512) NULL, updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (setting_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
--- Seed: 6 sectors (D-074), settings defaults (D-034/D-069)
-INSERT INTO sector_tags (name) VALUES ('Software Engineering'),('Data Science'),('AI/ML'),('Cyber Security'),('Web Development'),('Competitive Programming')
-  ON DUPLICATE KEY UPDATE name=VALUES(name);
-INSERT INTO system_settings (setting_key, setting_value, description) VALUES
+-- Seed: 6 sectors (D-074), settings defaults (D-034/D-069).
+-- Portability (D-167): seed inserts use INSERT IGNORE instead of
+-- ON DUPLICATE KEY UPDATE ... VALUES() — the multi-table SELECT form is
+-- rejected by MySQL 8.0.46 (error 1064) and VALUES() is unsupported on
+-- TiDB. Seeds run once on a fresh database; ignore-on-duplicate preserves
+-- the intended first-write-wins behaviour on both engines.
+INSERT IGNORE INTO sector_tags (name) VALUES ('Software Engineering'),('Data Science'),('AI/ML'),('Cyber Security'),('Web Development'),('Competitive Programming');
+INSERT IGNORE INTO system_settings (setting_key, setting_value, description) VALUES
   ('report.auto_hide_threshold','5','Distinct verified reporters required to auto-hide a post/event/comment (D-034)'),
   ('report.strike_window_days','30','Window for the 3-strikes rule (FR-REP-04)'),
   ('report.strike_count','3','Auto-hides in window that flag a user for review'),
   ('verification.overdue_hours','48','Hours after which a PENDING_REVIEW request raises an overdue alert (D-038)'),
   ('verification.resubmit_max_24h','3','Max resubmissions per rolling 24h (D-012)'),
   ('id_image.retention_days_approved','7','Days to keep ID image after approval (D-053)'),
-  ('id_image.retention_days_rejected','30','Days to keep ID image after rejection (D-053)')
-  ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value);
-INSERT INTO universities (name, short_name, email_domains) VALUES
-  ('Metropolitan University','MU','mu.edu.bd'),('University of Dhaka','DU','du.ac.bd')
-  ON DUPLICATE KEY UPDATE short_name=VALUES(short_name);
-INSERT INTO department_catalog (name, short_name) VALUES
-  ('Computer Science and Engineering','CSE'),('Electrical and Electronic Engineering','EEE')
-  ON DUPLICATE KEY UPDATE short_name=VALUES(short_name);
-INSERT INTO departments (university_id, catalog_id, name)
-  SELECT u.id, c.id, CONCAT(c.name,' — ',u.short_name) FROM universities u CROSS JOIN department_catalog c
-  ON DUPLICATE KEY UPDATE name=VALUES(name);
-INSERT INTO batches (university_id, department_id, label, start_year)
-  SELECT d.university_id, d.id, '45', 2022 FROM departments d
-  ON DUPLICATE KEY UPDATE label=VALUES(label);
-INSERT INTO batches (university_id, department_id, label, start_year)
-  SELECT d.university_id, d.id, '44', 2021 FROM departments d
-  ON DUPLICATE KEY UPDATE label=VALUES(label);
+  ('id_image.retention_days_rejected','30','Days to keep ID image after rejection (D-053)');
+INSERT IGNORE INTO universities (name, short_name, email_domains) VALUES
+  ('Metropolitan University','MU','mu.edu.bd'),('University of Dhaka','DU','du.ac.bd');
+INSERT IGNORE INTO department_catalog (name, short_name) VALUES
+  ('Computer Science and Engineering','CSE'),('Electrical and Electronic Engineering','EEE');
+INSERT IGNORE INTO departments (university_id, catalog_id, name)
+  SELECT u.id, c.id, CONCAT(c.name,' — ',u.short_name) FROM universities u CROSS JOIN department_catalog c;
+INSERT IGNORE INTO batches (university_id, department_id, label, start_year)
+  SELECT d.university_id, d.id, '45', 2022 FROM departments d;
+INSERT IGNORE INTO batches (university_id, department_id, label, start_year)
+  SELECT d.university_id, d.id, '44', 2021 FROM departments d;

@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS posts (
   INDEX idx_feed_uni (visibility, scope_university_id, scope_department_id, status, created_at, id),
   INDEX idx_feed_hub (visibility, scope_catalog_id, status, created_at, id),
   INDEX idx_post_author (author_id, created_at),
-  FULLTEXT KEY ft_posts (title, body),
   CONSTRAINT fk_post_author FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_post_scope_uni FOREIGN KEY (scope_university_id) REFERENCES universities(id) ON DELETE RESTRICT,
   CONSTRAINT fk_post_scope_dept FOREIGN KEY (scope_department_id) REFERENCES departments(id) ON DELETE RESTRICT,
@@ -81,5 +80,6 @@ CREATE TABLE IF NOT EXISTS event_responses (
   CONSTRAINT fk_evresp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_evresp_post FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
--- FULLTEXT on users.full_name for search (D-028)
-CREATE FULLTEXT INDEX ft_users_name ON users (full_name);
+-- Search portability (D-167, supersedes the D-028 FULLTEXT plan): no
+-- FULLTEXT index on users.full_name — TiDB does not support FULLTEXT, so
+-- SearchService uses portable LIKE matching on every database.

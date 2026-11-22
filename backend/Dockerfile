@@ -19,4 +19,8 @@ EXPOSE 8080
 ENV SPRING_PROFILES_ACTIVE=prod
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
   CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /api/health HTTP/1.0\r\n\r\n" >&3 && grep -q "200" <&3'
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+# JVM sized for a 512 MB container (Render Free): heap capped by
+# MaxRAMPercentage, metaspace bounded, thin thread stacks, SerialGC for
+# the smallest footprint. Override via JAVA_TOOL_OPTIONS if the host
+# provides more memory.
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=65", "-XX:MaxMetaspaceSize=256m", "-Xss512k", "-XX:+UseSerialGC", "-jar", "/app/app.jar"]
