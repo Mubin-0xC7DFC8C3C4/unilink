@@ -3,6 +3,7 @@
 # environments without Docker. Build from the repository root compose file.
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /src
+ENV MAVEN_CONFIG=""
 COPY pom.xml ./
 COPY .mvn ./.mvn
 COPY mvnw ./
