@@ -1037,3 +1037,30 @@ See `docs/phase-reports/01-addendum.md` for the full verification. D-072 to D-07
 - Problem (audit Worker 2, §4C): `ScheduledJobs.archivePastEvents` set every past event's post to `ARCHIVED`, including `REMOVED` and `HIDDEN_ADMIN` ones — overwriting their moderation state, so a later `RESTORE` could not know what the post was.
 - Fix: only `ACTIVE` posts become `ARCHIVED`. The `EventDetail` is still archived and teams still close for every past event.
 - Proven by `RepositoryServiceAuditTest.archivePastEventsKeepsModerationState` (H2): past `ACTIVE` → `ARCHIVED`; past `REMOVED` stays `REMOVED`.
+
+### D-158 Full-stack integration build: additive extension of the audited backend (ADOPTED) — owner master prompt 2026-11-22
+- The brief assumed a frontend-only tree; this workspace already holds the complete audited backend. The build therefore extends the existing backend additively (new Flyway V012, new endpoints) instead of rebuilding it, and removes the frontend's browser-local data layer (`frontendStore.ts`, `activityLog.tsx`) wherever a real API now exists. No committed migration (V001–V011) was modified; nothing was committed to git.
+
+### D-159 Session authentication retained over the brief's JWT mandate (DEVIATION — recorded for owner ruling)
+- The brief (§3/§6) mandates JWT access tokens + rotating refresh cookies. The existing platform uses Spring Session JDBC with HttpOnly cookies + CSRF, audited in Phase 3; the frontend, the admin TOTP flow and 287 backend tests are built on it, and a swap cannot be runtime-verified in this sandbox (Java→MySQL is blocked here). The session architecture is retained; the deviation and a JWT migration path are reported to the owner rather than silently imposed.
+
+### D-160 Argon2id retained over the brief's BCrypt-12 mandate (DEVIATION — recorded for owner ruling)
+- Argon2id (the audited Phase 1/3 choice) is at least as strong as BCrypt strength 12 for password storage; existing hashes cannot be re-encoded without plaintext. Retained.
+
+### D-161 SRS password rule retained over the brief's special-character rule (DEVIATION — per owner's standing SRS precedence)
+- The brief §18 requires a special character; SRS FR-AUTH-03 requires ≥8 chars with upper, lower and digit only, and the owner has previously ruled that the SRS takes precedence. The SRS rule stays in force for student passwords (admin passwords remain ≥12 per D-068 defaults).
+
+### D-162 Existing API contract names retained over the brief's suggested names (ADOPTED)
+- `/api/auth/register`, `/api/feed`, `/api/reactions`, `/api/bookmarks`, `/api/profiles/me` etc. stay; the brief's `/api/auth/signup`, `/api/posts`, `/api/saved`, `/api/users/me` names were not adopted, because the approved frontend is contract-tested against the existing names (brief §2 makes the existing frontend the source of truth).
+
+### D-163 Admin events are posts with an extended event_details row (ADOPTED)
+- V012 extends `event_details` (organizer, schedule, venue, registration, lifecycle `event_status` DRAFT/PUBLISHED/COMPLETED/CANCELLED, creating admin) instead of creating a parallel events table. Draft = post status DRAFT; cancelled = post status CANCELLED + event_status CANCELLED; the student lists already filter to ACTIVE posts, so drafts/cancelled events can never leak to students. Capacity and registration deadlines are enforced in `respondToEvent`; `event_responses` gains UNIQUE (user_id, post_id).
+
+### D-164 Five reaction types persist; one row per user per target (ADOPTED — supersedes the D-140 LIKE-only validation)
+- `PostService.react` now accepts LIKE, CELEBRATE, INSIGHTFUL, SUPPORT, CURIOUS; re-reacting replaces the stored type. A REACTION notification fires on a newly created post reaction.
+
+### D-165 Threaded comments via comments.parent_id (ADOPTED)
+- V012 adds `parent_id` (self-FK, ON DELETE CASCADE). Replies validate that the parent exists and belongs to the same post; REPLY notifications go to the parent author, COMMENT notifications to the post author.
+
+### D-166 GitHub integration is read-only OAuth with encrypted tokens (ADOPTED)
+- Scope `read:user`; the code exchange is server-side; tokens are stored AES-256-GCM encrypted (`github_connections`). Repository reads use the public GitHub API (the connection token when present); private repositories are refused. The OAuth callback is permitAll because GitHub's redirect carries no session — the HMAC-signed `state` binds the exchange to the student. UniLink-native discussions persist in `project_discussions` and are never posted to GitHub. Without `GITHUB_*` configuration the API reports `configured: false` and the UI shows that state instead of simulating a connection.

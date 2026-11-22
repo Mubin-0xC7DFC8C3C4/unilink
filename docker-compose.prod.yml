@@ -1,0 +1,73 @@
+# UniLink PRODUCTION stack — single host, Docker Compose.
+# Topology (matches the application design): nginx serves the built SPA and
+# proxies /api + /ws to the Spring Boot backend on the same origin; MySQL 8
+# is private to the compose network; uploads live on a named volume so they
+# survive container replacement.
+#
+# Usage:
+#   cp .env.production.example .env.production   # fill in real secrets
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+#
+# All secrets come from .env.production (gitignored). The backend runs with
+# SPRING_PROFILES_ACTIVE=prod, whose configuration fails fast if any required
+# variable is missing, uses Secure session cookies, and disables Swagger.
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env.production}
+      MYSQL_DATABASE: ${DB_NAME:-unilink}
+      MYSQL_USER: ${DB_USER:?Set DB_USER in .env.production}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.production}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:mysql://mysql:3306/${DB_NAME:-unilink}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
+      DB_USER: ${DB_USER:?Set DB_USER in .env.production}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.production}
+      DB_MIGRATION_USER: ${DB_MIGRATION_USER:-root}
+      DB_MIGRATION_PASSWORD: ${DB_MIGRATION_PASSWORD:-${MYSQL_ROOT_PASSWORD}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env.production}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:?Set INITIAL_ADMIN_EMAIL in .env.production}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Set INITIAL_ADMIN_PASSWORD in .env.production}
+      APP_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL in .env.production}
+      FRONTEND_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL in .env.production}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_REDIRECT_URI: ${APP_BASE_URL}/api/workspace/github/callback
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      MAIL_FROM: ${MAIL_FROM:-noreply@unilink.dev}
+      SMS_PROVIDER: ${SMS_PROVIDER:-log}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1,::1}
+    volumes:
+      - uploads:/data/unilink/storage
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      # Publish 80 on the host. For HTTPS, terminate TLS in front of this
+      # service (host nginx/Caddy with certbot, or a cloud load balancer)
+      # and set APP_BASE_URL to the https:// origin — see DEPLOYMENT.md.
+      - "80:80"
+
+volumes:
+  mysql-data:
+  uploads:

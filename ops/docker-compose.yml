@@ -1,13 +1,14 @@
-# UniLink dev compose (for later use — Docker is NOT installed in the build VM; the app runs
-# directly with ./mvnw spring-boot:run against the local MySQL, see docs/phase-reports/backend.md).
+# UniLink DEV compose — local development only. Passwords come from
+# ops/.env (gitignored); copy ops/compose.env.example to ops/.env first.
+# Production uses docker-compose.prod.yml at the repository root instead.
 services:
   mysql:
     image: mysql:8.0
     environment:
-      MYSQL_ROOT_PASSWORD: root_dev_pass
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in ops/.env}
       MYSQL_DATABASE: unilink_dev
       MYSQL_USER: unilink_app
-      MYSQL_PASSWORD: app_dev_pass
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in ops/.env}
     ports: ["3306:3306"]
     volumes: [mysql-data:/var/lib/mysql]
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
@@ -20,9 +21,9 @@ services:
       SPRING_PROFILES_ACTIVE: dev
       DB_URL: jdbc:mysql://mysql:3306/unilink_dev?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
       DB_USER: unilink_app
-      DB_PASSWORD: app_dev_pass
+      DB_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in ops/.env}
       DB_MIGRATION_USER: root
-      DB_MIGRATION_PASSWORD: root_dev_pass
+      DB_MIGRATION_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in ops/.env}
     ports: ["8080:8080"]
     depends_on: [mysql, mailcatcher]
 volumes:

@@ -8,3 +8,20 @@ storage-dev/
 .DS_Store
 frontend/tsconfig.tsbuildinfo
 __pycache__/
+
+# Environment files (examples stay tracked)
+.env.*
+!.env.example
+!**/.env.example
+!.env.*.example
+!**/.env.*.example
+# Backups and production data
+backups/
+storage/
+# Test/build reports
+frontend/playwright-report/
+frontend/test-results/
+backend/test-results/
+# IDE
+.idea/
+.vscode/
