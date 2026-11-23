@@ -11,8 +11,10 @@
 # in the single-origin design (no CORS, no cross-site cookies).
 /api/* https://unilink-api-243s.onrender.com/api/:splat 200
 /ws/* https://unilink-api-243s.onrender.com/ws/:splat 200
-# Admin portal is a separate Vite entry (admin.html).
-/admin /admin.html 200
-/admin/* /admin.html 200
+# Admin portal is a separate Vite entry (admin.html), served by Pages'
+# built-in pretty-URL handling at /admin. (Explicit rewrite rules for it
+# caused a 308 redirect loop against that built-in handling — removed
+# 2026-11-23. The /api/* proxy above is superseded by the Pages Function
+# in frontend/functions/api/, which Cloudflare does apply.)
 # Student app SPA fallback.
 /* /index.html 200
