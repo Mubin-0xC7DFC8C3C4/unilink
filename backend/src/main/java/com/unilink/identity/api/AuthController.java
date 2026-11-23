@@ -16,8 +16,10 @@ import java.util.Map;
 public class AuthController {
   private final AuthService auth; private final AccessPolicy policy; private final AccountDeletionService deletion;
   private final IpResolver ipResolver;
+  private final org.springframework.security.core.userdetails.UserDetailsService studentUds;
   private final HttpSessionSecurityContextRepository contextRepo = new HttpSessionSecurityContextRepository();
-  public AuthController(AuthService auth, AccessPolicy policy, AccountDeletionService deletion, IpResolver ipResolver){ this.auth=auth; this.policy=policy; this.deletion=deletion; this.ipResolver=ipResolver; }
+  public AuthController(AuthService auth, AccessPolicy policy, AccountDeletionService deletion, IpResolver ipResolver,
+                        @org.springframework.beans.factory.annotation.Qualifier("studentUserDetailsService") org.springframework.security.core.userdetails.UserDetailsService studentUds){ this.auth=auth; this.policy=policy; this.deletion=deletion; this.ipResolver=ipResolver; this.studentUds=studentUds; }
   private void saveAuth(HttpServletRequest req, HttpServletResponse res, Authentication a){
     SecurityContextHolder.getContext().setAuthentication(a);
     req.getSession(true); // session fixation: migrate on login via SecurityConfig
@@ -31,7 +33,23 @@ public class AuthController {
   @PostMapping(value="/api/auth/register", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
   @ResponseStatus(HttpStatus.CREATED)
   public UserDto register(@Valid @ModelAttribute RegisterForm form){ return auth.register(form); }
-  @PostMapping("/api/auth/verify-phone") public UserDto verifyPhone(@Valid @RequestBody OtpVerifyRequest r){ return auth.verifyPhone(r); }
+  @PostMapping("/api/auth/verify-phone") public UserDto verifyPhone(@Valid @RequestBody OtpVerifyRequest r, HttpServletRequest req, HttpServletResponse res){
+    UserDto dto = auth.verifyPhone(r);
+    // The OTP just proved control of this account's phone, and the calls
+    // the flow makes next (GET /auth/verification/status, resubmit) all
+    // require a session — but registration deliberately creates none, so
+    // every genuine user reached /pending with a 401 on the status query
+    // (production report 2026-11-23). Establish the same session a
+    // password login would give: no extra privilege, since write access
+    // still requires admin approval, and the user could obtain this exact
+    // session by logging in. Suspended/banned accounts get no session —
+    // the login path refuses them too.
+    if (!"SUSPENDED".equals(dto.state()) && !"BANNED".equals(dto.state())){
+      var ud = studentUds.loadUserByUsername(dto.email());
+      saveAuth(req, res, new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(ud, null, ud.getAuthorities()));
+    }
+    return dto;
+  }
   @PostMapping("/api/auth/otp/resend") public Map<String,String> resendOtp(@Valid @RequestBody OtpResendRequest r, HttpServletRequest req){
     return auth.resendPhoneOtp(r.userId(), ipResolver.resolve(req));
   }
