@@ -36,6 +36,20 @@ spring:
   mail:
     host: ${SMTP_HOST:localhost}
     port: ${SMTP_PORT:1025}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          # Hard timeouts are mandatory: JavaMail's defaults are infinite,
+          # so an unreachable/blackholed SMTP route otherwise blocks the
+          # request thread (and the user's signup) for minutes. Observed in
+          # production 2026-11-23: register/password-reset hung 52–178 s.
+          connectionTimeout: 10000
+          timeout: 10000
+          writeTimeout: 10000
+          starttls:
+            enable: ${SMTP_STARTTLS:false}
 server:
   # PORT is assigned by the host on PaaS deploys (e.g. Render); 8080 locally.
   port: ${PORT:8080}

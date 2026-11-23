@@ -9,6 +9,7 @@ import java.security.SecureRandom; import java.time.LocalDateTime; import java.u
 /** OTP (6-digit, 5 min, 5 attempts, hashed, single-use) + email link (24 h, hashed, single-use) — D-011. */
 @Service
 public class OtpService {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OtpService.class);
   private final PhoneOtpRepository phoneOtps; private final EmailVerificationTokenRepository emailTokens;
   private final PasswordResetTokenRepository resetTokens; private final SmsProvider sms; private final EmailProvider email;
   private static final SecureRandom RANDOM = new SecureRandom();
@@ -58,7 +59,11 @@ public class OtpService {
     row.setUserId(user.getId()); row.setTokenHash(Hashing.sha256(token)); row.setUsed(false);
     row.setExpiresAt(LocalDateTime.now().plusHours(24));
     emailTokens.save(row);
-    email.sendVerificationLink(user.getEmail(), baseUrl + "/api/auth/verify-email?token=" + token);
+    // A failed email send must not abort registration: the token is stored
+    // and the link can be re-sent. (Production 2026-11-23: an unreachable
+    // SMTP route otherwise destroyed signups entirely.)
+    try { email.sendVerificationLink(user.getEmail(), baseUrl + "/api/auth/verify-email?token=" + token); }
+    catch (Exception e){ log.error("Email verification link send failed for user {}: {}", user.getId(), e.getMessage()); }
     return token;
   }
   @Transactional
@@ -77,7 +82,11 @@ public class OtpService {
     row.setUserId(user.getId()); row.setOtpHash(Hashing.sha256(otp)); row.setAttempts(0); row.setUsed(false);
     row.setExpiresAt(LocalDateTime.now().plusMinutes(15));
     resetTokens.save(row);
-    email.sendOtp(user.getEmail(), otp);
+    // Same rule: delivery failure is logged, never thrown — the reset
+    // request endpoint must keep its always-200 anti-enumeration contract
+    // even when the mail provider is down.
+    try { email.sendOtp(user.getEmail(), otp); }
+    catch (Exception e){ log.error("Password reset code send failed for user {}: {}", user.getId(), e.getMessage()); }
   }
   @Transactional
   public void verifyPasswordResetOtp(User user, String otp){
