@@ -18,7 +18,7 @@ const json = (body: unknown, status = 200) =>
 const fetchMock = vi.fn();
 function qc() { return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }); }
 function renderAt(path: string) {
-  return render(<QueryClientProvider client={qc()}><ThemeProvider><AuthProvider><MemoryRouter initialEntries={[path]}><Routes><Route element={<Layout />}><Route path="/login" element={<div>LOGIN PAGE</div>} /><Route path="/feed" element={<div>FEED PAGE</div>} /></Route></Routes></MemoryRouter></AuthProvider></ThemeProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={qc()}><ThemeProvider><AuthProvider><MemoryRouter initialEntries={[path]}><Routes><Route element={<Layout />}><Route path="/" element={<div>LANDING PAGE</div>} /><Route path="/login" element={<div>LOGIN PAGE</div>} /><Route path="/feed" element={<div>FEED PAGE</div>} /></Route></Routes></MemoryRouter></AuthProvider></ThemeProvider></QueryClientProvider>);
 }
 
 beforeEach(() => {
@@ -73,6 +73,36 @@ describe('Layout header (owner decision 2026-11-20)', () => {
     // Anonymous here, so Log in / Sign up show instead of the account avatar.
     expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Account menu' })).toBeNull();
+  });
+
+  it('shows only brand + Log in / Sign up on the landing page while logged out (2026-11-24)', () => {
+    renderAt('/');
+    expect(screen.getByRole('link', { name: 'UniLink' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign up' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search people, posts, projects')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Notifications' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Account menu' })).toBeNull();
+  });
+
+  it('keeps the full header on the landing page while logged in (2026-11-24)', async () => {
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url === '/api/csrf') return json({});
+      if (url === '/api/auth/me') return json({ id: 5, fullName: 'Ayesha Rahman', email: 'ayesha@gmail.com', state: 'VERIFIED' });
+      if (url === '/api/notifications') return json([]);
+      return json({ message: 'no mock route for ' + url }, 404);
+    });
+    renderAt('/');
+    expect(await screen.findByPlaceholderText('Search people, posts, projects')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account menu' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Log in' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Sign up' })).toBeNull();
   });
 
   it('the bell opens the notifications popover and the gear opens the Settings modal (no page navigation)', async () => {
