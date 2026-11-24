@@ -65,11 +65,15 @@ export function Layout(){
   // the signed-in experience and is removed from these routes entirely
   // (not hidden placeholders). '/verification-preview' (Phase 2.3's
   // prototype journey) belongs to the same signed-out set.
-  // Owner decision (2026-11-24): the public landing page (/) is minimal
-  // too while logged out — no search bar, no workspace grid, no bell,
-  // no gear, no avatar. A signed-in user on / keeps the full header.
+  // Owner decision (2026-11-24, round 4): the public landing page (/)
+  // ALWAYS gets the dedicated static public header — brand plus Log in /
+  // Sign up only. The header must never depend on auth state here: while
+  // the session restore is pending `user` is null (minimal header), and
+  // once /auth/me answers the restored user flipped it to the full app
+  // header — the 2-second revert. A signed-in user on / now keeps the
+  // public header too; the full header belongs to the app routes only.
   const AUTH_ROUTES = ['/login', '/signup', '/forgot-password', '/otp', '/pending', '/verification-preview'];
-  const minimalHeader = AUTH_ROUTES.includes(loc.pathname) || (loc.pathname === '/' && !user);
+  const minimalHeader = AUTH_ROUTES.includes(loc.pathname) || loc.pathname === '/';
   // Owner polish (2026-11-20): during verification the header carries the
   // brand only — no Log in / Sign up buttons.
   const bareHeader = loc.pathname === '/verification-preview';

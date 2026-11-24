@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -87,22 +87,31 @@ describe('Layout header (owner decision 2026-11-20)', () => {
     expect(screen.queryByRole('button', { name: 'Account menu' })).toBeNull();
   });
 
-  it('keeps the full header on the landing page while logged in (2026-11-24)', async () => {
+  it('keeps the static public header on the landing page even after a session restores (2026-11-24, 2-second revert)', async () => {
+    // Regression test for the reported bug: the header showed Log in /
+    // Sign up for ~2 s, then flipped to the search bar and the TM avatar
+    // once /auth/me restored the session. The landing page now always
+    // renders the static public header, whatever the auth state is.
     fetchMock.mockImplementation(async (input: unknown) => {
       const url = String(input);
       if (url === '/api/csrf') return json({});
-      if (url === '/api/auth/me') return json({ id: 5, fullName: 'Ayesha Rahman', email: 'ayesha@gmail.com', state: 'VERIFIED' });
+      if (url === '/api/auth/me') return json({ id: 5, fullName: 'Tanvir Mahmud', email: 'tanvir@gmail.com', state: 'VERIFIED' });
       if (url === '/api/notifications') return json([]);
       return json({ message: 'no mock route for ' + url }, 404);
     });
     renderAt('/');
-    expect(await screen.findByPlaceholderText('Search people, posts, projects')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Workspace' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Account menu' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Log in' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Sign up' })).toBeNull();
+    // Wait for the session restore to settle, then assert the header
+    // never switched to the app chrome.
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/auth/me')).toBe(true));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByRole('link', { name: 'UniLink' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign up' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search people, posts, projects')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Workspace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Notifications' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Account menu' })).toBeNull();
   });
 
   it('the bell opens the notifications popover and the gear opens the Settings modal (no page navigation)', async () => {

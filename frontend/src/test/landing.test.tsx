@@ -10,7 +10,11 @@ describe('Landing page copy (2026-11-24)', () => {
   it('shows the new hero and feature grid, and nothing below it', () => {
     render(<MemoryRouter><Landing /></MemoryRouter>);
     expect(screen.getByText('FOR UNIVERSITY STUDENTS IN BANGLADESH')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Where university students connect, collaborate, and build together.' })).toBeInTheDocument();
+    // Headline has no trailing period (2026-11-24 round 4), and the hero
+    // carries the landing-scoped class that sizes it and pushes it down.
+    expect(document.querySelector('.landing-hero')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Where university students connect, collaborate, and build together' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Where university students connect, collaborate, and build together.' })).toBeNull();
     expect(screen.getByText('Join a trusted academic network exclusive to verified students. Discuss coursework, discover campus events, and find teammates for your next project or hackathon.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Get started →' })).toHaveAttribute('href', '/signup');
     expect(screen.getByRole('link', { name: 'Log in' })).toHaveAttribute('href', '/login');
