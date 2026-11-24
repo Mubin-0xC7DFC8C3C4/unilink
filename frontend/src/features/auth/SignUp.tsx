@@ -86,8 +86,11 @@ export default function SignUp(){
     // The form states this next to the upload fields — the back side is
     // never claimed to be stored or verified.
     if(frontFile) fd.append('idCard',frontFile); if(photoFile) fd.append('profilePhoto',photoFile);
-    return apiPost<{id?:number}>('/auth/register', fd); },
-    onSuccess: (data)=>{ if (data.id!==undefined) sessionStorage.setItem('unilink:otpUserId', String(data.id)); nav('/otp'); } });
+    return apiPost<{id?:number; emailSent?:boolean}>('/auth/register', fd); },
+    // emailSent tells the OTP step whether the verification email actually
+    // went out (false when SMTP delivery failed) so it can offer a resend
+    // instead of leaving the user to discover it later.
+    onSuccess: (data)=>{ if (data.id!==undefined) sessionStorage.setItem('unilink:otpUserId', String(data.id)); sessionStorage.setItem('unilink:emailSent', String(data.emailSent ?? true)); nav('/otp'); } });
   const steps: (keyof SignUpForm)[][] = [['fullName','phone','email'],['universityId','departmentId','batchId','address'],['studentId','password','confirmPassword']];
   const next = async ()=>{ if(await trigger(steps[step])) setStep(s=>s+1); };
   const onSubmit = (d: SignUpForm)=>{ const fe: {front?:string;back?:string;photo?:string} = {};

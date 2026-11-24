@@ -53,6 +53,13 @@ public class AuthController {
   @PostMapping("/api/auth/otp/resend") public Map<String,String> resendOtp(@Valid @RequestBody OtpResendRequest r, HttpServletRequest req){
     return auth.resendPhoneOtp(r.userId(), ipResolver.resolve(req));
   }
+  /** Resend the email verification link. Always answers the same generic
+   *  200 (see AuthService) — it must not reveal whether the account or
+   *  the email exists, or whether it is already verified. */
+  @PostMapping("/api/auth/email-verification/resend") public Map<String,String> resendEmailVerification(@Valid @RequestBody EmailVerificationResendRequest r, HttpServletRequest req){
+    if ((r.userId()==null) && (r.email()==null || r.email().isBlank())) throw new Exceptions.BadRequest("INVALID_REQUEST","Provide a user id or an email address.");
+    return auth.resendEmailVerificationLink(r.userId(), r.email(), ipResolver.resolve(req));
+  }
   @GetMapping("/api/auth/verify-email") public UserDto verifyEmail(@RequestParam String token){ return auth.verifyEmailByToken(token); }
   @PostMapping("/api/auth/login") public UserDto login(@Valid @RequestBody LoginRequest r, HttpServletRequest req, HttpServletResponse res){
     Authentication a = auth.login(r.email(), r.password(), ipResolver.resolve(req));

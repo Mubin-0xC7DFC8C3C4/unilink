@@ -106,9 +106,9 @@ public class AuthService {
     // above — registration itself is never blocked by the cap (D-077 soft
     // uniqueness: a shared family phone must still be able to sign up).
     throttle.tryAcquire("otp-resend-phone:"+u.getPhone(), 5, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW);
-    otp.sendEmailVerificationLink(u, props.baseUrl());
+    boolean emailSent = otp.sendEmailVerificationLink(u, props.baseUrl());
     ocrJob.runOcr(req.getId(), idKey, u.getFullName(), u.getStudentId(), uni.getName());
-    return toDto(u);
+    return toDto(u, false, emailSent);
   }
   public static UserDto toDto(User u){
     return toDto(u, false);
@@ -117,8 +117,14 @@ public class AuthService {
    *  its password (D-094). Other flows (register, verify, resubmit) create
    *  no restricted session, so they use the flag-free form above. */
   public static UserDto toDto(User u, boolean mustChangePassword){
+    return toDto(u, mustChangePassword, null);
+  }
+  /** emailSent is meaningful only at registration (null elsewhere): it
+   *  tells the frontend whether the verification email actually went out,
+   *  so a failed send is visible and re-sendable instead of silent. */
+  public static UserDto toDto(User u, boolean mustChangePassword, Boolean emailSent){
     return new UserDto(u.getId(), u.getFullName(), u.getEmail(), u.getPhone(), u.getUniversityId(), u.getDepartmentId(),
-      u.getBatchId(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt(), mustChangePassword);
+      u.getBatchId(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt(), mustChangePassword, emailSent);
   }
   /** D-094: whether the stored credential carries the must-change flag. */
   public boolean mustChangePassword(Long userId){
@@ -169,6 +175,35 @@ public class AuthService {
     // Deliberately the same shape as the generic response above (no channel):
     // a differing body would re-introduce the existence oracle.
     return Map.of("status","OTP resent");
+  }
+  /** Resend of the email verification link (2026-11-24, real SMTP):
+   *  the secure retry when the registration send failed or the link
+   *  expired. Same shape as resendPhoneOtp — 60 s cooldown, at most 5
+   *  resends per hour per user, per email and 10 per hour per IP, acquired
+   *  atomically — and the same anti-enumeration contract: unknown users,
+   *  unknown emails and already-verified emails all get the same generic
+   *  200, send nothing and consume no quota. */
+  @Transactional
+  public Map<String,String> resendEmailVerificationLink(Long userId, String email, String ip){
+    User u = null;
+    if (userId!=null) u = users.findById(userId).orElse(null);
+    else if (email!=null && !email.isBlank()) u = users.findByEmail(email.trim()).orElse(null);
+    if (u==null || u.getEmailVerifiedAt()!=null) return Map.of("status","Verification email resent");
+    String userKey = "email-resend:"+u.getId();
+    String emailKey = u.getEmail()==null || u.getEmail().isBlank() ? null : "email-resend-email:"+u.getEmail().toLowerCase();
+    String ipKey = "email-resend-ip:"+ip;
+    if (throttle.isLocked(userKey) || (emailKey!=null && throttle.isLocked(emailKey)) || throttle.isLocked(ipKey))
+      throw new Exceptions.TooManyRequests("Too many verification email requests. Try again later.");
+    if (throttle.isCoolingDown(userKey, OTP_RESEND_COOLDOWN))
+      throw new Exceptions.TooManyRequests("Please wait a minute before requesting another verification email.");
+    Map<String,Integer> caps = new LinkedHashMap<>();
+    caps.put(userKey, 5);
+    if (emailKey!=null) caps.put(emailKey, 5);
+    caps.put(ipKey, 10);
+    if (!throttle.tryAcquireAll(caps, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW, userKey, OTP_RESEND_COOLDOWN))
+      throw new Exceptions.TooManyRequests("Too many verification email requests. Try again later.");
+    otp.sendEmailVerificationLink(u, props.baseUrl());
+    return Map.of("status","Verification email resent");
   }
   @Transactional
   public UserDto verifyEmail(String token, Long userId){

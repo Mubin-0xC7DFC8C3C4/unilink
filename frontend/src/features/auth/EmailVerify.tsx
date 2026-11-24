@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react'; import { useSearchParams, Link } from 'react-router-dom'; import { apiGet, errorMessage } from '../../api/client';
-import { PageHeader, Skeleton, ErrorState } from '../../design/primitives';
+import { useEffect, useState } from 'react'; import { useMutation } from '@tanstack/react-query'; import { useSearchParams, Link } from 'react-router-dom'; import { apiGet, apiPost, errorMessage } from '../../api/client';
+import { Button, Field, Input, PageHeader, Skeleton, ErrorState } from '../../design/primitives';
 export default function EmailVerify(){ const [params]=useSearchParams(); const token=params.get('token'); const [state,setState]=useState<'loading'|'ok'|'error'>('loading'); const [err,setErr]=useState('');
   useEffect(()=>{ if(!token){ setState('error'); setErr('No verification token was provided in the link.'); return; } apiGet(`/auth/verify-email?token=${encodeURIComponent(token)}`).then(()=>setState('ok')).catch(e=>{ setState('error'); setErr(errorMessage(e)); }); },[token]);
-  return <div className="container"><PageHeader eyebrow="Verification · Email" title="Email verification" />{state==='loading'?<Skeleton/>:state==='ok'?<><p>Your email is verified. Once your phone OTP is also verified, your application moves to Pending Review.</p><Link className="btn btn-primary" to="/pending">Continue to Pending Review →</Link></>:<ErrorState message={err} />}</div>; }
+  // Links expire after 24 hours (and a newer link retires the old one), so
+  // a failed or stale link needs a secure retry: request a fresh link by
+  // email. The endpoint answers the same generic message whether the
+  // address belongs to an account or not.
+  const [email, setEmail] = useState('');
+  const resend = useMutation({ mutationFn: ()=>apiPost('/auth/email-verification/resend',{email}) });
+  return <div className="container"><PageHeader eyebrow="Verification · Email" title="Email verification" />{state==='loading'?<Skeleton/>:state==='ok'?<><p>Your email is verified. Once your phone OTP is also verified, your application moves to Pending Review.</p><Link className="btn btn-primary" to="/pending">Continue to Pending Review →</Link></>:<><ErrorState message={err} /><form onSubmit={e=>{e.preventDefault(); resend.mutate();}} style={{marginTop:16}}><Field label="Email address" htmlFor="resend-email"><Input id="resend-email" type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="email" /></Field><Button type="submit" variant="primary" disabled={resend.isPending || email.trim()===''}>Resend verification email</Button></form>{resend.isSuccess && <p role="status">If an account with that email exists, a new verification link was sent. Check your inbox.</p>}{resend.isError && <p role="alert" className="field-error">{errorMessage(resend.error)}</p>}</>}</div>; }

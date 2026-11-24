@@ -12,5 +12,8 @@ public class Exceptions {
   public static class Forbidden extends AppException { public Forbidden(String msg){ super(HttpStatus.FORBIDDEN,"FORBIDDEN",msg); } }
   public static class Conflict extends AppException { public Conflict(String code,String msg){ super(HttpStatus.CONFLICT,code,msg); } }
   public static class TooManyRequests extends AppException { public TooManyRequests(String msg){ super(HttpStatus.TOO_MANY_REQUESTS,"RATE_LIMITED",msg); } }
+  /** A downstream channel (SMS + email) is down. The message is deliberately
+   *  generic — the caller can retry — and carries no provider detail. */
+  public static class ServiceUnavailable extends AppException { public ServiceUnavailable(String msg){ super(HttpStatus.SERVICE_UNAVAILABLE,"SERVICE_UNAVAILABLE",msg); } }
   public static class Unprocessable extends AppException { public Unprocessable(String code,String msg){ super(HttpStatus.UNPROCESSABLE_ENTITY,code,msg); } }
 }

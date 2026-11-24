@@ -8,6 +8,9 @@ import java.time.LocalDateTime;
 
 public interface EmailVerificationTokenRepository extends JpaRepository<EmailVerificationToken, Long> {
   Optional<EmailVerificationToken> findTopByUserIdAndUsedFalseOrderByCreatedAtDesc(Long userId);
+  /** Re-issuing a link retires the previous ones, so only the newest link
+   *  in a mailbox works (mirrors the phone OTP's newest-wins behaviour). */
+  List<EmailVerificationToken> findByUserIdAndUsedFalse(Long userId);
   /** Audit Worker 2 (D-148): direct lookup by token hash. verifyEmailByToken
    *  used to scan the whole table (findAll) to find the row for a link. */
   Optional<EmailVerificationToken> findTopByTokenHashAndUsedFalseOrderByCreatedAtDesc(String tokenHash);

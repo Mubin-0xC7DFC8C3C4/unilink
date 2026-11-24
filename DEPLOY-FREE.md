@@ -64,6 +64,18 @@ The code must be on GitHub; both Render and Cloudflare deploy from it.
    | `STORAGE_PROVIDER` | `db` |
    | `APP_BASE_URL` | the Cloudflare Pages URL (fill in after Step 3, then restart the service) |
    | `FRONTEND_BASE_URL` | same Pages URL |
+   | `MAIL_PROVIDER` | `smtp` for real email delivery (`log` = no delivery; codes are never printed in logs either way) |
+   | `SMTP_HOST` | `smtp.gmail.com` |
+   | `SMTP_PORT` | `587` |
+   | `SMTP_USERNAME` | your Gmail address |
+   | `SMTP_PASSWORD` | a Google App Password (Google Account → Security → 2-Step Verification → App passwords), **not** your Gmail password |
+   | `SMTP_STARTTLS` | `true` |
+   | `MAIL_FROM` | the same Gmail address as `SMTP_USERNAME` |
+
+   With `MAIL_PROVIDER=smtp` the backend refuses to start unless
+   `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD` and `MAIL_FROM` are all
+   set — a half-configured SMTP used to fail silently and no email was
+   ever delivered. Changing any of these redeploys the service.
 
    The Dockerfile already sizes the JVM for Render's 512 MB
    (heap ≈ 65% RAM, capped metaspace, SerialGC).
@@ -95,10 +107,12 @@ proxied to Render — cookies and CSRF work exactly as designed, no CORS.
 - **Wake the backend first**: open `https://<project>.pages.dev` (or the
   health URL) ~3 minutes before the demonstration; the first load wakes
   Render (≈ 1 minute), afterwards everything is fast.
-- **OTP and password-reset codes**: with no mail/SMS provider
-  configured, codes are written to the backend log (the product's
-  logging providers). Read them in **Render → your service → Logs**
-  during the demo. For real use, set `SMTP_HOST` etc. — no code change.
+- **Email verification and password-reset codes**: with `MAIL_PROVIDER=smtp`
+  they arrive in the student's real inbox. With the `log` provider no email
+  is sent at all — and since 2026-11-24 codes are never printed in the
+  backend log either, so a demo without SMTP needs the admin to approve
+  accounts manually. Phone OTPs still have no free delivery path (they need
+  a paid SMS gateway); the phone OTP falls back to email when SMS fails.
 - **Admin demo**: sign in at `/admin/login` with the `INITIAL_ADMIN_*`
   credentials, complete the forced password change + TOTP setup, create
   a moderator/university data as needed, publish an event — it appears

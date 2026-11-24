@@ -240,7 +240,10 @@ class RepositoryServiceAuditTest {
   @Test void emailVerificationByTokenWorks(){
     var f = factory.seedMaster();
     User u = student("s8-user", "S8U", f);
-    String token = otp.sendEmailVerificationLink(u, "http://localhost");
+    assertTrue(otp.sendEmailVerificationLink(u, "http://localhost"), "the link send must succeed");
+    String link = TestProviders.EMAIL_LINKS.get(u.getEmail());
+    assertNotNull(link, "the fake email provider must have recorded the link");
+    String token = link.substring(link.indexOf("token=") + 6);
     var dto = auth.verifyEmailByToken(token);
     assertTrue(dto.emailVerified(), "the link must verify the email");
     assertCode(Exceptions.BadRequest.class, "TOKEN_NOT_FOUND",

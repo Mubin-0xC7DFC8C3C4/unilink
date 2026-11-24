@@ -32,7 +32,10 @@ public class OtpService {
     try { sms.sendOtp(user.getPhone(), otp); return "SMS"; }
     catch (SmsProvider.ProviderException ex){
       row.setChannel("EMAIL"); phoneOtps.save(row);
-      email.sendOtp(user.getEmail(), otp); // fallback channel, same OTP record
+      try { email.sendOtp(user.getEmail(), otp); } // fallback channel, same OTP record
+      // Both channels down: a clean 503, not a 500 — the user can retry
+      // the send and the OTP is never silently lost.
+      catch (Exception emailEx){ throw new Exceptions.ServiceUnavailable("We could not send your verification code. Please try again in a moment."); }
       return "EMAIL";
     }
   }
@@ -52,19 +55,24 @@ public class OtpService {
     row.setUsed(true); phoneOtps.save(row);
     user.setPhoneVerifiedAt(LocalDateTime.now());
   }
+  /** Issues (and sends) a fresh verification link. Returns true only when
+   *  the provider accepted the message — the caller reports this to the
+   *  frontend so a failed send is visible and re-sendable instead of
+   *  silently lost. A failed send still must not abort registration: the
+   *  token is stored and the link can be re-sent. (Production 2026-11-23:
+   *  an unreachable SMTP route otherwise destroyed signups entirely.)
+   *  Re-issuing retires earlier unused links, so only the newest link in
+   *  the mailbox works. The token itself is never logged. */
   @Transactional
-  public String sendEmailVerificationLink(User user, String baseUrl){
+  public boolean sendEmailVerificationLink(User user, String baseUrl){
     String token = newToken();
+    emailTokens.findByUserIdAndUsedFalse(user.getId()).forEach(old -> { old.setUsed(true); emailTokens.save(old); });
     EmailVerificationToken row = new EmailVerificationToken();
     row.setUserId(user.getId()); row.setTokenHash(Hashing.sha256(token)); row.setUsed(false);
     row.setExpiresAt(LocalDateTime.now().plusHours(24));
     emailTokens.save(row);
-    // A failed email send must not abort registration: the token is stored
-    // and the link can be re-sent. (Production 2026-11-23: an unreachable
-    // SMTP route otherwise destroyed signups entirely.)
-    try { email.sendVerificationLink(user.getEmail(), baseUrl + "/api/auth/verify-email?token=" + token); }
-    catch (Exception e){ log.error("Email verification link send failed for user {}: {}", user.getId(), e.getMessage()); }
-    return token;
+    try { email.sendVerificationLink(user.getEmail(), baseUrl + "/api/auth/verify-email?token=" + token); return true; }
+    catch (Exception e){ log.error("Email verification link send failed for user {}: {}", user.getId(), e.getMessage()); return false; }
   }
   @Transactional
   public void verifyEmailToken(User user, String token){

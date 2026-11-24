@@ -38,7 +38,10 @@ public final class AuthDtos {
   public record DeleteAccountRequest(@NotBlank String password) {}
   public record UserDto(Long id, String fullName, String email, String phone, Long universityId, Long departmentId,
                         Long batchId, String studentId, String state, boolean phoneVerified, boolean emailVerified,
-                        LocalDateTime createdAt, boolean mustChangePassword) {}
+                        LocalDateTime createdAt, boolean mustChangePassword, Boolean emailSent) {}
+  /** Resend of the email verification link: either the user id (from the
+   *  sign-up flow) or the email address (typed in by the user later). */
+  public record EmailVerificationResendRequest(Long userId, String email) {}
   public record VerificationStatusDto(Long userId, String state, String requestStatus, Double ocrMatchScore,
                                       String ocrStatus, String rejectionReason) {}
 }

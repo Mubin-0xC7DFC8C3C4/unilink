@@ -142,6 +142,40 @@ describe('OtpStep (I-5)', () => {
     await screen.findByText(/could not find your new account/);
     expect(calls.some((c) => c.url === '/api/auth/verify-phone')).toBe(false);
   });
+  it('shows a resend-verification-email option when registration reported the email was not sent', async () => {
+    sessionStorage.setItem('unilink:otpUserId', '42');
+    sessionStorage.setItem('unilink:emailSent', 'false');
+    route = (url, method) => {
+      if (url === '/api/auth/email-verification/resend' && method === 'POST') return json({ status: 'Verification email resent' });
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderWithProviders(<Routes><Route path="/otp" element={<OtpStep />} /></Routes>, ['/otp']);
+    await screen.findByText(/could not send your verification email/);
+    await user.click(screen.getByRole('button', { name: 'Resend verification email' }));
+    await screen.findByText('Verification email resent. Check your inbox.');
+    const resend = calls.find((c) => c.url === '/api/auth/email-verification/resend');
+    expect(resend?.method).toBe('POST');
+    expect(jsonBody(resend!)).toEqual({ userId: 42 });
+  });
+});
+
+describe('EmailVerify resend (real SMTP)', () => {
+  it('offers a resend form when no token is present and posts the typed email', async () => {
+    route = (url, method) => {
+      if (url === '/api/auth/email-verification/resend' && method === 'POST') return json({ status: 'Verification email resent' });
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderWithProviders(<Routes><Route path="/verify-email" element={<EmailVerify />} /></Routes>, ['/verify-email']);
+    await screen.findByText('No verification token was provided in the link.');
+    await user.type(screen.getByLabelText('Email address'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: 'Resend verification email' }));
+    await screen.findByText(/a new verification link was sent/);
+    const resend = calls.find((c) => c.url === '/api/auth/email-verification/resend');
+    expect(resend?.method).toBe('POST');
+    expect(jsonBody(resend!)).toEqual({ email: 'test@example.com' });
+  });
 });
 
 describe('ForgotPassword (I-5, Phase 2.4)', () => {
