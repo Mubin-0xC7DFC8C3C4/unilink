@@ -35,3 +35,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
 # the smallest footprint. Override via JAVA_TOOL_OPTIONS if the host
 # provides more memory.
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=65", "-XX:MaxMetaspaceSize=256m", "-Xss512k", "-XX:+UseSerialGC", "-jar", "/app/app.jar"]
+# D-187 (2026-11-25): auto-deploy probe — comment only. Render only
+# autodeploys when a push changes files under the service root directory
+# (backend/), so the earlier docs-only test commits could never trigger
+# a deploy. This comment is the first valid test: it changes a file
+# under backend/ without affecting the build or the application.
