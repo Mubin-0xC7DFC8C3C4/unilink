@@ -24,7 +24,7 @@ class SmtpEmailAdapterTest {
 
   private AppProperties props(String from){
     return new AppProperties(null, null, null, null,
-      new AppProperties.Mail("smtp", from, "smtp.gmail.com"), null, "test-key", null);
+      new AppProperties.Mail("smtp", from, "smtp.gmail.com", null), null, "test-key", null);
   }
 
   private JavaMailSenderImpl senderImpl(String host, String username, String password){
@@ -55,6 +55,18 @@ class SmtpEmailAdapterTest {
     ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
     verify(sender).send(cap.capture());
     assertTrue(cap.getValue().getText().contains("123456"));
+  }
+
+  @Test void otpBodyStatesTheTrueExpiry() {
+    // D-189: the reset code lives 15 minutes and the signup code 10 —
+    // the old fixed "5 minutes" wording was wrong for both.
+    JavaMailSender sender = mock(JavaMailSender.class);
+    SmtpEmailAdapter adapter = new SmtpEmailAdapter(sender, props("unilink@gmail.com"));
+    adapter.sendOtp("student@example.com", "123456", 15);
+    ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
+    verify(sender).send(cap.capture());
+    assertTrue(cap.getValue().getText().contains("expires in 15 minutes"));
+    assertFalse(cap.getValue().getText().contains("expires in 5 minutes"));
   }
 
   @Test void authenticationFailureBecomesProviderException() {

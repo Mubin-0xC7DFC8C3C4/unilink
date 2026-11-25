@@ -95,9 +95,15 @@ app:
     # log (default, every profile): mail is written to the application
     # log. smtp: real delivery via SMTP_HOST — select only when a mail
     # server is actually configured, or sends fail and abort flows.
+    # brevo: real delivery via the Brevo HTTPS API (POST
+    # https://api.brevo.com/v3/smtp/email) — the only path that works
+    # from Render Free, which blocks outbound TCP to SMTP ports 25/465/
+    # 587 (D-189). Requires BREVO_API_KEY and MAIL_FROM set to a sender
+    # address verified in Brevo (Settings > Senders & IPs > Senders).
     provider: ${MAIL_PROVIDER:log}
     from: ${MAIL_FROM:noreply@unilink.dev}
     host: ${SMTP_HOST:localhost}
+    brevo-api-key: ${BREVO_API_KEY:}
   security:
     student-idle: 2h
     admin-idle: 30m

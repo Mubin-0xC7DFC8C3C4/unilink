@@ -305,6 +305,10 @@ describe('ForgotPassword (I-5, Phase 2.4)', () => {
     await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
     await user.click(screen.getByRole('button', { name: 'Send verification code' }));
     await screen.findByText('Enter verification code');
+    // D-189: the code screen must not claim delivery — the backend
+    // answers "If the email exists, a reset code was sent" and the
+    // provider may still have failed.
+    expect(screen.getByText(/If an account exists for/)).toBeInTheDocument();
     expect(screen.getByText(/t•••@example\.com/)).toBeInTheDocument();
     const boxes = screen.getAllByRole('textbox');
     expect(boxes).toHaveLength(6);

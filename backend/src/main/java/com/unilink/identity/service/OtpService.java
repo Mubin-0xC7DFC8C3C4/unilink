@@ -35,7 +35,7 @@ public class OtpService {
     try { sms.sendOtp(user.getPhone(), otp); return "SMS"; }
     catch (SmsProvider.ProviderException ex){
       row.setChannel("EMAIL"); phoneOtps.save(row);
-      try { email.sendOtp(user.getEmail(), otp); } // fallback channel, same OTP record
+      try { email.sendOtp(user.getEmail(), otp, 5); } // fallback channel, same OTP record
       // Both channels down: a clean 503, not a 500 — the user can retry
       // the send and the OTP is never silently lost.
       catch (Exception emailEx){ throw new Exceptions.ServiceUnavailable("We could not send your verification code. Please try again in a moment."); }
@@ -96,7 +96,7 @@ public class OtpService {
     // Same rule: delivery failure is logged, never thrown — the reset
     // request endpoint must keep its always-200 anti-enumeration contract
     // even when the mail provider is down.
-    try { email.sendOtp(user.getEmail(), otp); }
+    try { email.sendOtp(user.getEmail(), otp, 15); }
     catch (Exception e){ log.error("Password reset code send failed for user {}: {}", user.getId(), e.getMessage()); }
   }
   /** Email OTP code (D-174): 6 digits, 10-minute expiry, hashed,
@@ -113,7 +113,7 @@ public class OtpService {
     row.setUserId(user.getId()); row.setOtpHash(Hashing.sha256(otp)); row.setAttempts(0); row.setUsed(false);
     row.setExpiresAt(LocalDateTime.now().plusMinutes(10));
     emailOtps.save(row);
-    try { email.sendOtp(user.getEmail(), otp); return true; }
+    try { email.sendOtp(user.getEmail(), otp, 10); return true; }
     catch (Exception e){ log.error("Email OTP send failed for user {}: {}", user.getId(), e.getMessage()); return false; }
   }
   /** Whether an unused, unexpired email OTP exists for the user — the

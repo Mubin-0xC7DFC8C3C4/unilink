@@ -53,6 +53,7 @@ public class SmtpEmailAdapter implements EmailProvider {
     } catch (Exception e){ throw new ProviderException("SMTP send failed: "+e.getMessage()); }
   }
   @Override public void sendVerificationLink(String to, String link){ send(to,"Verify your UniLink email","Hello,\n\nPlease verify your UniLink email address by clicking the link below. The link expires in 24 hours.\n\n"+link+"\n\nIf you did not create a UniLink account, you can ignore this email."); }
-  @Override public void sendOtp(String to, String otp){ send(to,"Your UniLink code","Your UniLink verification code is "+otp+". It expires in 5 minutes. Never share it with anyone."); }
+  @Override public void sendOtp(String to, String otp){ sendOtp(to, otp, 5); }
+  @Override public void sendOtp(String to, String otp, int expiryMinutes){ send(to,"Your UniLink code","Your UniLink verification code is "+otp+". It expires in "+expiryMinutes+" minutes. Never share it with anyone."); }
   @Override public void sendSimple(String to, String subject, String body){ send(to,subject,body); }
 }

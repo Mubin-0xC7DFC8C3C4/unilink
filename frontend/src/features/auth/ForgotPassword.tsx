@@ -214,7 +214,7 @@ export default function ForgotPassword() {
 
     {stage === 'code' && <div style={{ textAlign: 'center', paddingTop: 32 }}>
       <h1 className="headline">Enter verification code</h1>
-      <p className="lead">We’ve sent a 6-digit verification code to your personal email ({maskEmail(email)}).</p>
+      <p className="lead">If an account exists for {maskEmail(email)}, we&apos;ve sent a 6-digit verification code to it.</p>
       <OtpBoxes digits={digits} error={codeError !== null} shaking={shaking} onShakeEnd={() => setShaking(false)} onDigit={applyDigits} inputRefs={inputRefs} />
       {codeError && <p role="alert" style={{ color: 'var(--verify-error)', margin: '8px 0 0' }}>{codeError.kind === 'invalid' ? INVALID_CODE_TEXT : codeError.text}</p>}
       <div style={{ marginTop: 24 }}>
