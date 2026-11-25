@@ -1,5 +1,25 @@
 import { ApiError, type ApiErrorBody } from './types';
-function csrfToken(): string | undefined { const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/); return m ? decodeURIComponent(m[1]) : undefined; }
+/** CSRF token for mutations (production 2026-11-25): the backend's
+ *  handler XOR-masks the token (Spring Security 6 default with
+ *  CookieCsrfTokenRepository), so the XSRF-TOKEN cookie holds the RAW
+ *  token — which the server rejects in the header. The masked token is
+ *  what GET /api/csrf returns, and that is the value mutations must
+ *  send. Sending the raw cookie value made every UI mutation (profile
+ *  edits, posts, settings, account deletion) fail with 403. The masked
+ *  value unmasks to the same raw token, so it stays valid while the
+ *  session does; it is refreshed when a mutation is rejected. */
+let csrfTokenCache: string | undefined;
+export function resetCsrfTokenCache(): void { csrfTokenCache = undefined; }
+async function fetchCsrfToken(): Promise<string | undefined> {
+  if (csrfTokenCache) return csrfTokenCache;
+  try {
+    const res = await fetch('/api/csrf', { credentials: 'include' });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as { token?: unknown };
+    if (typeof body.token === 'string' && body.token) { csrfTokenCache = body.token; return body.token; }
+  } catch { /* no token: the mutation still goes out and the server decides */ }
+  return undefined;
+}
 export function isNetworkError(e: unknown): boolean { return e instanceof TypeError || (e instanceof ApiError && e.status===0); }
 export const SESSION_EXPIRED_KEY = 'unilink:session-expired';
 export const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Please log in again.';
@@ -34,10 +54,25 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string,string> = { ...(init.headers as Record<string,string>||{}) };
   const isForm = init.body instanceof FormData;
   if (!isForm && init.body) headers['Content-Type']='application/json';
-  const csrf = csrfToken(); if (csrf) headers['X-XSRF-TOKEN']=csrf;
-  let res: Response;
-  try { res = await fetch(`/api${path}`, { ...init, headers, credentials: 'include' }); }
-  catch { throw new ApiError(0, { code:'NETWORK_ERROR', message:'Network error — the server could not be reached. Check your connection and try again.' }); }
+  const method = (init.method ?? 'GET').toUpperCase();
+  // /api/auth/**, /api/public/** and /api/csrf are CSRF-exempt, so a 403
+  // there is never a stale token — no token fetch, no retry.
+  const needsCsrf = method !== 'GET' && method !== 'HEAD' && !isAuthApiPath(path);
+  const run = async (): Promise<Response> => {
+    const h = { ...headers };
+    if (needsCsrf) { const csrf = await fetchCsrfToken(); if (csrf) h['X-XSRF-TOKEN'] = csrf; }
+    try { return await fetch(`/api${path}`, { ...init, headers: h, credentials: 'include' }); }
+    catch { throw new ApiError(0, { code:'NETWORK_ERROR', message:'Network error — the server could not be reached. Check your connection and try again.' }); }
+  };
+  let res = await run();
+  if (res.status === 403 && needsCsrf) {
+    // The session may have rotated (e.g. after login) since the token
+    // was cached: fetch a fresh token once and retry the mutation. A 403
+    // means the server rejected the request before running it, so the
+    // retry cannot double-apply a side effect.
+    resetCsrfTokenCache();
+    res = await run();
+  }
   if (res.status===204) return undefined as T;
   const text = await res.text(); let body: ApiErrorBody & Record<string,unknown> = {};
   try { body = text ? JSON.parse(text) : {}; } catch {

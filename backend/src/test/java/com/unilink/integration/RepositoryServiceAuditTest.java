@@ -355,6 +355,28 @@ class RepositoryServiceAuditTest {
     assertTrue(messageRepo.findById(msgId).isPresent(), "the sent message itself stays");
   }
 
+  // Production 2026-11-25: POST /api/me/delete on a user created by the
+  // real registration flow returned 409 CONFLICT (DataIntegrityViolation)
+  // instead of deleting. The factory-built deletion tests above pass, so
+  // reproduce with the real register path (phone OTP + email token rows,
+  // stored ID/photo, verification request) and assert deletion succeeds.
+  @Test void accountDeletionWorksForRealRegisteredUser(){
+    var f = factory.seedMaster();
+    com.unilink.identity.dto.AuthDtos.RegisterForm form = new com.unilink.identity.dto.AuthDtos.RegisterForm();
+    form.setFullName("Delete Repro"); form.setPhone("01799999999");
+    form.setEmail("del-repro@example.com"); form.setUniversityId(f.mu().getId());
+    form.setDepartmentId(f.muCse().getId()); form.setBatchId(f.muBatch().getId());
+    form.setAddress("Dhaka"); form.setStudentId("DELREPRO1"); form.setPassword("Student123");
+    form.setIdCard(new org.springframework.mock.web.MockMultipartFile("idCard", "id.png", "image/png", PNG));
+    form.setProfilePhoto(new org.springframework.mock.web.MockMultipartFile("profilePhoto", "photo.png", "image/png", PNG));
+    var dto = auth.register(form);
+    Long id = dto.id();
+    assertTrue(users.findById(id).isPresent());
+    assertTrue(storage.exists(users.findById(id).orElseThrow().getIdCardKey()), "ID image must be stored before deletion");
+    deletion.deleteOwnAccount(id, "Student123", "127.0.0.1");
+    assertTrue(users.findById(id).isEmpty(), "registered user must be deletable");
+  }
+
   // D-156: the archive job must not overwrite a moderation state.
   @Test void archivePastEventsKeepsModerationState(){
     var f = factory.seedMaster();

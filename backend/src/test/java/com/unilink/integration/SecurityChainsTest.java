@@ -166,6 +166,53 @@ class SecurityChainsTest {
       .andExpect(status().isForbidden());
   }
 
+  // Production 2026-11-25: with a real session and the masked CSRF token
+  // from /api/csrf, deleting the account must succeed and the login must
+  // then fail. (The raw XSRF-TOKEN cookie value is rejected by the XOR
+  // handler — that is what the frontend sends today, see the client fix.)
+  @Test void accountDeletionSucceedsWithSessionAndEndpointCsrfToken() throws Exception {
+    User u = student("chain-del");
+    Cookie[] cookies = loginAsStudent(u);
+    MvcResult csrf = mvc.perform(get("/api/csrf").cookie(cookies))
+        .andExpect(status().isOk()).andReturn();
+    String token = new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(csrf.getResponse().getContentAsString()).get("token").asText();
+    assertFalse(token.isBlank());
+    // GET /csrf may refresh the XSRF-TOKEN cookie; the delete must carry
+    // the cookies the csrf response set, not the stale login ones.
+    java.util.Map<String, Cookie> byName = new java.util.LinkedHashMap<>();
+    for (Cookie c : cookies) byName.put(c.getName(), c);
+    for (Cookie c : csrf.getResponse().getCookies()) byName.put(c.getName(), c);
+    cookies = byName.values().toArray(new Cookie[0]);
+    mvc.perform(post("/api/me/delete").cookie(cookies).contentType(MediaType.APPLICATION_JSON)
+        .header("X-XSRF-TOKEN", token)
+        .content("{\"password\":\"Student123\"}"))
+      .andExpect(status().isOk()).andExpect(jsonPath("$.deleted").value(true));
+    assertTrue(users.findById(u.getId()).isEmpty(), "account must be gone after delete");
+    mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+        .content("{\"email\":\"" + u.getEmail() + "\",\"password\":\"Student123\"}"))
+      .andExpect(status().isUnauthorized());
+  }
+
+  // The raw XSRF-TOKEN cookie value is NOT a valid header token (the
+  // XOR handler masks it): sending it raw must fail with 403, exactly
+  // as the frontend did before the client fix (production 2026-11-25).
+  @Test void rawCookieCsrfTokenIsRejectedOnAccountDeletion() throws Exception {
+    User u = student("chain-del-raw");
+    Cookie[] cookies = loginAsStudent(u);
+    MvcResult csrf = mvc.perform(get("/api/csrf").cookie(cookies))
+        .andExpect(status().isOk()).andReturn();
+    String raw = null;
+    for (Cookie c : csrf.getResponse().getCookies())
+      if ("XSRF-TOKEN".equals(c.getName())) raw = c.getValue();
+    assertNotNull(raw, "csrf priming must set the XSRF-TOKEN cookie");
+    mvc.perform(post("/api/me/delete").cookie(cookies).contentType(MediaType.APPLICATION_JSON)
+        .header("X-XSRF-TOKEN", raw)
+        .content("{\"password\":\"Student123\"}"))
+      .andExpect(status().isForbidden());
+    assertTrue(users.findById(u.getId()).isPresent(), "a rejected delete must leave the account alone");
+  }
+
   // ---- D-121: suspended / expired-temp logins leave a login_attempts row ----
   @Test void suspendedLoginAttemptIsRecorded() {
     User u = student("chain-susp");
