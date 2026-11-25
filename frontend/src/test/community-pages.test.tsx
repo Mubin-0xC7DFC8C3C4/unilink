@@ -203,7 +203,7 @@ describe('Student Profile — sign out (D-202)', () => {
   });
 
   it('shows Pinned Projects for GitHub-pinned rows and opens the live viewer (D-203)', async () => {
-    route = (url, method) => {
+    route = (url) => {
       if (url === '/api/auth/me') return json({ id: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED' });
       if (url === '/api/profiles/me') return json({ userId: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED', departmentName: 'CSE', universityName: 'Metropolitan University', followers: 96, following: 128, skills: [] });
       if (url === '/api/profiles/me/activity-items') return json([]);
