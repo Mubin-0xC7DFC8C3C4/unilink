@@ -17,6 +17,24 @@ public final class FeedSpecifications {
       default -> cb.disjunction();
     };
   }
+  /** CONNECTIONS level (D-200): only the caller's own posts and posts by
+   *  their accepted connections, AND the existing scope predicate — so a
+   *  cross-university connection cannot leak a DEPARTMENT-scoped post.
+   *  Read live from the ACCEPTED rows, so removal takes effect on the
+   *  next fetch. Valid visibilities stay DEPARTMENT / UNIVERSITY /
+   *  DEPARTMENT_HUB / NATIONAL; the level is a reader-side scope, not a
+   *  post visibility. */
+  public static Specification<Post> connections(Long userId, java.util.Set<Long> connectionIds,
+                                                Long universityId, Long departmentId, Long catalogId){
+    java.util.Set<Long> authors = new java.util.HashSet<>(connectionIds);
+    authors.add(userId);
+    return (r,q,cb)-> cb.and(r.get("authorId").in(authors),
+      cb.or(cb.equal(r.get("visibility"),"NATIONAL"),
+        cb.and(cb.equal(r.get("scopeUniversityId"),universityId),
+          cb.or(cb.equal(r.get("visibility"),"UNIVERSITY"), cb.equal(r.get("visibility"),"DEPARTMENT"))),
+        cb.and(cb.equal(r.get("visibility"),"DEPARTMENT"), cb.equal(r.get("scopeDepartmentId"),departmentId)),
+        cb.and(cb.equal(r.get("visibility"),"DEPARTMENT_HUB"), cb.equal(r.get("scopeCatalogId"),catalogId))));
+  }
   public static Specification<Post> sector(Long sectorId){
     if (sectorId==null) return (r,q,cb)-> cb.conjunction();
     return (r,q,cb)->{

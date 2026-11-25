@@ -205,9 +205,9 @@ describe('Notification preferences in the Settings modal (I-8)', () => {
     const user = userEvent.setup();
     renderWithProviders(<ThemeProvider><AuthProvider><SettingsModal open initialTab="Notifications" onClose={() => {}} /></AuthProvider></ThemeProvider>);
     await user.click(screen.getByRole('button', { name: 'Save preferences' }));
-    await waitFor(() => expect(calls.filter((c) => c.url === '/api/notifications/preferences' && c.method === 'POST').length).toBe(3));
+    await waitFor(() => expect(calls.filter((c) => c.url === '/api/notifications/preferences' && c.method === 'POST').length).toBe(6));
     const types = calls.filter((c) => c.url === '/api/notifications/preferences').map((c) => jsonBody(c).type);
-    expect(types.sort()).toEqual(['REPORT_AUTO_HIDE', 'TEAM_JOIN_ACCEPTED', 'VERIFICATION_DECISION']);
+    expect(types.sort()).toEqual(['CONNECTION_ACCEPTED', 'CONNECTION_REJECTED', 'CONNECTION_REQUEST', 'REPORT_AUTO_HIDE', 'TEAM_JOIN_ACCEPTED', 'VERIFICATION_DECISION']);
     expect(calls.filter((c) => c.url === '/api/notifications/preferences').every((c) => 'emailEnabled' in jsonBody(c) && 'inAppEnabled' in jsonBody(c))).toBe(true);
   });
 });

@@ -131,7 +131,7 @@ export function Layout(){
       {brand}
       <form role="search" className="hdr-search" onSubmit={e=>{e.preventDefault(); nav(`/search?q=${encodeURIComponent(searchText.trim())}`);}}>
         <span className="hdr-search-icon"><IconSearch /></span>
-        <input ref={searchRef} type="search" aria-label="Search" placeholder="Search people, posts, projects" value={searchText} onChange={e=>setSearchText(e.target.value)} className="input-search" />
+        <input ref={searchRef} type="search" aria-label="Search" placeholder="Search people, posts, events" value={searchText} onChange={e=>setSearchText(e.target.value)} className="input-search" />
         <kbd className="hdr-kbd" aria-hidden="true">/</kbd>
       </form>
       <div className="hdr-actions">

@@ -66,6 +66,16 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
   const [coverOk,setCoverOk]=useState(true);
   const q = useQuery({ queryKey:['user',id], queryFn: ()=>apiGet<UserProfile>(isMe?'/profiles/me':`/profiles/${id}`), retry:false });
   const uid = isMe ? (q.data?.userId ?? q.data?.id) : id;
+  // D-200: mutual connection status with this student (Connect / Accept
+  // / Pending / Cancel / Connected + Remove). Own profile shows none.
+  const connQ = useQuery({ queryKey:['connection-status', uid], queryFn: ()=>apiGet<{status:string; requestId?:number|null}>(`/connections/status/${uid}`), retry:false, enabled: !isMe && uid!=null });
+  const connStatus = connQ.data?.status;
+  const connRequestId = connQ.data?.requestId;
+  const connect = useMutation({ mutationFn: ()=>apiPost('/connections/requests',{addresseeId: Number(uid)}), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
+  const acceptConn = useMutation({ mutationFn: ()=>apiPost(`/connections/requests/${connRequestId}/accept`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
+  const rejectConn = useMutation({ mutationFn: ()=>apiPost(`/connections/requests/${connRequestId}/reject`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
+  const cancelConn = useMutation({ mutationFn: ()=>apiPost(`/connections/requests/${connRequestId}/cancel`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
+  const removeConn = useMutation({ mutationFn: ()=>apiDelete(`/connections/${uid}`), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
   const activity = useQuery({ queryKey:['user-activity-items',id], queryFn: ()=>apiGet<any[]>(isMe?'/profiles/me/activity-items':`/profiles/${id}/activity-items`), retry:false, enabled: !!uid });
   const follow = useMutation({ mutationFn: ()=>apiPost(`/profiles/${id}/follow`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['user',id]}) });
   const unfollow = useMutation({ mutationFn: ()=>apiDelete(`/profiles/${id}/follow`), onSuccess: ()=>qc.invalidateQueries({queryKey:['user',id]}) });
@@ -82,10 +92,15 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
       {(typeof u.followers==='number' || typeof u.following==='number') && <p className="pf-counts"><strong>{u.followers??0}</strong> Followers · <strong>{u.following??0}</strong> Following</p>}
     </div>
     {!isMe && <div className="pf-head-action">
-      <Button variant="primary" onClick={()=>follow.mutate()} disabled={follow.isPending}>{follow.isSuccess?'Following':'Follow'}</Button>{' '}<Button onClick={()=>unfollow.mutate()} disabled={unfollow.isPending}>Unfollow</Button>
+      <Button variant="primary" onClick={()=>follow.mutate()} disabled={follow.isPending}>{follow.isSuccess?'Following':'Follow'}</Button>{' '}<Button onClick={()=>unfollow.mutate()} disabled={unfollow.isPending}>Unfollow</Button>{' '}
+      {connStatus==='CONNECTED' && <><span className="pf-badge">✓ Connected</span>{' '}<Button onClick={()=>removeConn.mutate()} disabled={removeConn.isPending}>Remove connection</Button></>}
+      {connStatus==='PENDING_OUTGOING' && <><span className="pf-badge">Request sent</span>{' '}<Button onClick={()=>cancelConn.mutate()} disabled={cancelConn.isPending || connRequestId==null}>Cancel request</Button></>}
+      {connStatus==='PENDING_INCOMING' && <><Button variant="primary" onClick={()=>acceptConn.mutate()} disabled={acceptConn.isPending || connRequestId==null}>Accept connection</Button>{' '}<Button onClick={()=>rejectConn.mutate()} disabled={rejectConn.isPending || connRequestId==null}>Decline</Button></>}
+      {connStatus==='NONE' && <Button onClick={()=>connect.mutate()} disabled={connect.isPending}>Connect</Button>}
     </div>}
   </div>
   {!isMe && (follow.isError||unfollow.isError) && <p role="alert" className="field-error">{errorMessage(follow.error||unfollow.error)}</p>}
+  {!isMe && (connect.isError||acceptConn.isError||rejectConn.isError||cancelConn.isError||removeConn.isError) && <p role="alert" className="field-error">{errorMessage(connect.error||acceptConn.error||rejectConn.error||cancelConn.error||removeConn.error)}</p>}
   <div className="pf-grid">
     <div>
       <section className="pf-card"><h2>About Me</h2>{u.bio ? <p style={{margin:0}}>{u.bio}</p> : <p className="secondary" style={{margin:0}}>{isMe?'Add a short bio with Edit Profile.':'No bio yet.'}</p>}</section>

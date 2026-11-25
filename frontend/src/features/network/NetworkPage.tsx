@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, errorMessage } from '../../api/client';
+import { apiDelete, apiGet, apiPost, errorMessage } from '../../api/client';
 import { Button, EmptyState, PageHeader, Skeleton } from '../../design/primitives';
 import type { UserProfile } from '../../api/types';
 
 interface TeamDto { id: number; name: string; creatorId: number; maxSize?: number; status?: string }
 interface JoinRequestDto { id: number; teamId: number; userId: number; status: string; message?: string }
+interface ConnectionRequestDto { id: number; requesterId: number; requesterName?: string; addresseeId: number; addresseeName?: string; status: string; message?: string }
 
 const NW_CSS = `
 .nw-banner{border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 14px;font-size:.9rem;margin-bottom:16px}
@@ -26,6 +27,10 @@ function initialsOf(name: string) {
   return parts.length ? (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() : '?';
 }
 
+/** Sample rows render ONLY under the Preview banner (when live network
+ *  data is genuinely unavailable) and their buttons are disabled — they
+ *  never pretend to act (D-200: the old local-only Accept/Ignore/Follow
+ *  buttons are gone). */
 const SAMPLE_REQUESTS = [
   { id: 'sr-1', name: 'Sadia Islam', meta: 'CSE · Batch 28 · Metropolitan University', team: 'Bus Tracker Team' },
   { id: 'sr-2', name: 'Rakib Ahmed', meta: 'CSE · Batch 27 · Metropolitan University', team: 'Contest Team Alpha' },
@@ -36,25 +41,37 @@ const SAMPLE_SUGGESTIONS = [
 ];
 
 /**
- * My Network. What the backend supports today, wired for real:
- * - Requests: team join requests for teams the student created —
+ * My Network (D-200). What the backend supports, wired for real:
+ * - Connection requests: GET /connections/requests/incoming and
+ *   /outgoing; decided through POST /connections/requests/{id}/accept,
+ *   /reject and /cancel. A connection is mutual; accepting does not
+ *   auto-follow.
+ * - Team requests: team join requests for teams the student created —
  *   GET /teams, GET /teams/{id}/requests, decided through
- *   POST /teams/requests/{id}/decide {accept} (the Teams page's own
- *   contract). UniLink follows are instant, so there is no follow
- *   request queue in the backend; the requests shown here are the
- *   platform's real request inbox.
+ *   POST /teams/requests/{id}/decide {accept}.
  * - Your network: follower/following counts from GET /profiles/me,
  *   with expandable lists from GET /profiles/{id}/followers and
- *   /profiles/{id}/following, and real suggestions from
- *   GET /profiles/suggestions (department-first). The API exposes counts only — no follower/following list endpoint
- *   exists yet, so no list is fabricated.
- * - Suggested students: no suggestions endpoint exists; sample
- *   suggestions render only in the preview state (when the live
- *   requests data is unavailable), under the preview banner.
+ *   /profiles/{id}/following. Those endpoints return a bare list, so
+ *   the page reads the array directly (the old `.items` read could
+ *   never render a list).
+ * - Suggested students: real suggestions from GET /profiles/suggestions
+ *   (department-first) with a real Follow button.
  */
 export default function NetworkPage() {
   const qc = useQueryClient();
   const me = useQuery({ queryKey: ['my-profile'], queryFn: () => apiGet<UserProfile>('/profiles/me'), retry: false });
+  const incomingQ = useQuery({ queryKey: ['connection-requests-incoming'], queryFn: () => apiGet<ConnectionRequestDto[]>('/connections/requests/incoming'), retry: false });
+  const outgoingQ = useQuery({ queryKey: ['connection-requests-outgoing'], queryFn: () => apiGet<ConnectionRequestDto[]>('/connections/requests/outgoing'), retry: false });
+  const incoming = incomingQ.data ?? [];
+  const outgoing = outgoingQ.data ?? [];
+  const decideConnection = useMutation({
+    mutationFn: ({ rid, accept }: { rid: number; accept: boolean }) => apiPost(`/connections/requests/${rid}/${accept ? 'accept' : 'reject'}`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['connection-requests-incoming'] }); qc.invalidateQueries({ queryKey: ['connection-requests-outgoing'] }); },
+  });
+  const cancelConnection = useMutation({
+    mutationFn: (rid: number) => apiPost(`/connections/requests/${rid}/cancel`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['connection-requests-outgoing'] }); },
+  });
   const teamsQ = useQuery({ queryKey: ['teams'], queryFn: () => apiGet<TeamDto[]>('/teams'), retry: false });
   const myId = (me.data as any)?.userId as number | undefined;
   const ownedTeams = (teamsQ.data ?? []).filter((t) => myId != null && t.creatorId === myId);
@@ -81,11 +98,15 @@ export default function NetworkPage() {
   });
 
   const [listOpen, setListOpen] = useState<'followers' | 'following' | null>(null);
-  const followersQ = useQuery({ queryKey: ['my-followers', myId], queryFn: () => apiGet<any>(`/profiles/${myId}/followers?size=50`), retry: false, enabled: !!myId && listOpen === 'followers' });
-  const followingQ = useQuery({ queryKey: ['my-following', myId], queryFn: () => apiGet<any>(`/profiles/${myId}/following?size=50`), retry: false, enabled: !!myId && listOpen === 'following' });
+  const followersQ = useQuery({ queryKey: ['my-followers', myId], queryFn: () => apiGet<any[]>(`/profiles/${myId}/followers?size=50`), retry: false, enabled: !!myId && listOpen === 'followers' });
+  const followingQ = useQuery({ queryKey: ['my-following', myId], queryFn: () => apiGet<any[]>(`/profiles/${myId}/following?size=50`), retry: false, enabled: !!myId && listOpen === 'following' });
   const suggestionsQ = useQuery({ queryKey: ['suggestions'], queryFn: () => apiGet<any[]>('/profiles/suggestions'), retry: false });
   const followMut = useMutation({
     mutationFn: (id: number) => apiPost(`/profiles/${id}/follow`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['suggestions'] }); qc.invalidateQueries({ queryKey: ['my-profile'] }); },
+  });
+  const unfollowMut = useMutation({
+    mutationFn: (id: number) => apiDelete(`/profiles/${id}/follow`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['suggestions'] }); qc.invalidateQueries({ queryKey: ['my-profile'] }); },
   });
   const personRow = (p: any, action?: React.ReactNode) => (
@@ -96,9 +117,8 @@ export default function NetworkPage() {
     </div>
   );
   const preview = teamsQ.isError;
-  const [gone, setGone] = useState<Set<string>>(new Set());
-  const [followed, setFollowed] = useState<Set<string>>(new Set());
-  const dismiss = (id: string) => setGone((s) => new Set(s).add(id));
+  const followers: any[] = followersQ.data ?? [];
+  const following: any[] = followingQ.data ?? [];
 
   return (
     <div className="container">
@@ -106,17 +126,42 @@ export default function NetworkPage() {
       <PageHeader eyebrow="Community" title="My Network" lead="Manage your team invitations and academic connections." />
       {preview && <div className="nw-banner" role="note"><strong>Preview</strong> — live network data is unavailable, so sample requests and suggestions are shown instead. They are not real student activity.</div>}
 
-      <h2 className="headline nw-section">Requests</h2>
+      <h2 className="headline nw-section">Connection requests</h2>
+      {preview ? SAMPLE_REQUESTS.map((r) => (
+        <div key={r.id} className="nw-row">
+          <span className="nw-avatar" aria-hidden="true">{initialsOf(r.name)}</span>
+          <div className="nw-main"><p className="nw-name">{r.name}</p><p className="nw-meta">{r.meta} · wants to connect</p></div>
+          <div className="nw-actions"><Button variant="primary" className="btn-sm" disabled>Accept</Button><Button className="btn-sm" disabled>Ignore</Button></div>
+        </div>
+      )) : incomingQ.isPending || outgoingQ.isPending ? <Skeleton />
+      : incoming.length === 0 && outgoing.length === 0 ? <EmptyState title="No connection requests" body="When a student asks to connect, the request appears here for you to accept or ignore." />
+      : (<>
+        {incoming.map((r) => (
+          <div key={r.id} className="nw-row">
+            <span className="nw-avatar" aria-hidden="true">{initialsOf(r.requesterName || 'Student')}</span>
+            <div className="nw-main"><p className="nw-name"><Link to={`/profile/${r.requesterId}`}>{r.requesterName || `Student ${r.requesterId}`}</Link></p><p className="nw-meta">wants to connect with you</p>{r.message && <p className="nw-meta">“{r.message}”</p>}</div>
+            <div className="nw-actions"><Button variant="primary" className="btn-sm" disabled={decideConnection.isPending} onClick={() => decideConnection.mutate({ rid: r.id, accept: true })}>Accept</Button><Button className="btn-sm" disabled={decideConnection.isPending} onClick={() => decideConnection.mutate({ rid: r.id, accept: false })}>Ignore</Button></div>
+          </div>
+        ))}
+        {outgoing.map((r) => (
+          <div key={`out-${r.id}`} className="nw-row">
+            <span className="nw-avatar" aria-hidden="true">{initialsOf(r.addresseeName || 'Student')}</span>
+            <div className="nw-main"><p className="nw-name"><Link to={`/profile/${r.addresseeId}`}>{r.addresseeName || `Student ${r.addresseeId}`}</Link></p><p className="nw-meta">Connection request sent — waiting for a reply</p>{r.message && <p className="nw-meta">“{r.message}”</p>}</div>
+            <div className="nw-actions"><Button className="btn-sm" disabled={cancelConnection.isPending} onClick={() => cancelConnection.mutate(r.id)}>Cancel</Button></div>
+          </div>
+        ))}
+      </>)}
+      {(decideConnection.isError || cancelConnection.isError) && <p role="alert" className="field-error">{errorMessage((decideConnection.error || cancelConnection.error) as any)}</p>}
+
+      <h2 className="headline nw-section">Team requests</h2>
       {preview ? (
-        SAMPLE_REQUESTS.filter((r) => !gone.has(r.id)).length === 0
-          ? <EmptyState title="No pending requests" body="Sample requests you accept or ignore disappear from this list." />
-          : SAMPLE_REQUESTS.filter((r) => !gone.has(r.id)).map((r) => (
-            <div key={r.id} className="nw-row">
-              <span className="nw-avatar" aria-hidden="true">{initialsOf(r.name)}</span>
-              <div className="nw-main"><p className="nw-name">{r.name}</p><p className="nw-meta">{r.meta} · wants to join {r.team}</p></div>
-              <div className="nw-actions"><Button variant="primary" className="btn-sm" onClick={() => dismiss(r.id)}>Accept</Button><Button className="btn-sm" onClick={() => dismiss(r.id)}>Ignore</Button></div>
-            </div>
-          ))
+        SAMPLE_REQUESTS.map((r) => (
+          <div key={r.id} className="nw-row">
+            <span className="nw-avatar" aria-hidden="true">{initialsOf(r.name)}</span>
+            <div className="nw-main"><p className="nw-name">{r.name}</p><p className="nw-meta">{r.meta} · wants to join {r.team}</p></div>
+            <div className="nw-actions"><Button variant="primary" className="btn-sm" disabled>Accept</Button><Button className="btn-sm" disabled>Ignore</Button></div>
+          </div>
+        ))
       ) : teamsQ.isPending ? <Skeleton />
       : requests.length === 0 ? <EmptyState title="No pending requests" body="When a student asks to join a team you created, the request appears here for you to accept or ignore." />
       : requests.map((r) => (
@@ -135,8 +180,8 @@ export default function NetworkPage() {
           <span><strong>{typeof me.data?.following === 'number' ? me.data.following : '—'}</strong>Following <Button className="btn-sm" aria-expanded={listOpen === 'following'} onClick={() => setListOpen(listOpen === 'following' ? null : 'following')}>View</Button></span>
         </div>
       )}
-      {listOpen === 'followers' && (followersQ.isPending ? <Skeleton /> : ((followersQ.data?.items ?? []).length === 0 ? <EmptyState title="No followers yet" body="Students who follow you will appear here." /> : (followersQ.data?.items ?? []).map((p: any) => personRow(p))))}
-      {listOpen === 'following' && (followingQ.isPending ? <Skeleton /> : ((followingQ.data?.items ?? []).length === 0 ? <EmptyState title="Not following anyone yet" body="Students you follow will appear here." /> : (followingQ.data?.items ?? []).map((p: any) => personRow(p))))}
+      {listOpen === 'followers' && (followersQ.isPending ? <Skeleton /> : (followers.length === 0 ? <EmptyState title="No followers yet" body="Students who follow you will appear here." /> : followers.map((p: any) => personRow(p))))}
+      {listOpen === 'following' && (followingQ.isPending ? <Skeleton /> : (following.length === 0 ? <EmptyState title="Not following anyone yet" body="Students you follow will appear here." /> : following.map((p: any) => personRow(p, <Button className="btn-sm" onClick={() => unfollowMut.mutate(p.userId)}>Unfollow</Button>))))}
 
       <h2 className="headline nw-section">Suggested students</h2>
       {preview ? (
@@ -144,12 +189,14 @@ export default function NetworkPage() {
           <div key={s.id} className="nw-row">
             <span className="nw-avatar" aria-hidden="true">{initialsOf(s.name)}</span>
             <div className="nw-main"><p className="nw-name">{s.name}</p><p className="nw-meta">{s.meta}</p></div>
-            <div className="nw-actions"><Button className="btn-sm" aria-pressed={followed.has(s.id)} onClick={() => setFollowed((f) => { const n = new Set(f); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })}>{followed.has(s.id) ? 'Following' : 'Follow'}</Button></div>
+            <div className="nw-actions"><Button className="btn-sm" disabled>Follow</Button></div>
           </div>
         ))
       ) : suggestionsQ.isPending ? <Skeleton />
       : (suggestionsQ.data ?? []).length === 0 ? <EmptyState title="No suggestions right now" body="Suggestions appear here as more students from your department and batch join UniLink." />
-      : (suggestionsQ.data ?? []).map((p: any) => personRow(p, <Button className="btn-sm" disabled={followMut.isPending} onClick={() => followMut.mutate(p.userId)}>Follow</Button>))}
+      : (suggestionsQ.data ?? []).map((p: any) => personRow(p, p.followedByViewer
+        ? <Button className="btn-sm" disabled={unfollowMut.isPending} onClick={() => unfollowMut.mutate(p.userId)}>Unfollow</Button>
+        : <Button className="btn-sm" disabled={followMut.isPending} onClick={() => followMut.mutate(p.userId)}>Follow</Button>))}
       {followMut.isError && <p role="alert" className="field-error">{errorMessage(followMut.error)}</p>}
     </div>
   );

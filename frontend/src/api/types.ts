@@ -17,8 +17,8 @@ export const LEVELS = ['DEPARTMENT','UNIVERSITY','HUB','NATIONAL'] as const;
 export interface SectorTag { id: number; name: string; active?: boolean }
 export interface AttachmentItem { id: string|number; fileName: string; contentType?: string; sizeBytes?: number; createdAt?: string }
 export interface CommunityContext { universityId?: number; universityName?: string; departmentId?: number; departmentName?: string; catalogId?: number; departmentRoomPublicId?: string; universityRoomPublicId?: string }
-/** Notification types the backend actually emits (NotificationEventListener). */
-export const NOTIFICATION_TYPES = ['VERIFICATION_DECISION','REPORT_AUTO_HIDE','TEAM_JOIN_ACCEPTED'] as const;
+/** Notification types the backend actually emits (NotificationEventListener + ConnectionService). */
+export const NOTIFICATION_TYPES = ['VERIFICATION_DECISION','REPORT_AUTO_HIDE','TEAM_JOIN_ACCEPTED','CONNECTION_REQUEST','CONNECTION_ACCEPTED','CONNECTION_REJECTED'] as const;
 export interface ProjectItem { id: string|number; title?: string; description?: string; url?: string }
 export interface EducationItem { id: string|number; institution?: string; degree?: string; year?: number }
 export interface AchievementItem { id: string|number; title?: string; description?: string; year?: number }

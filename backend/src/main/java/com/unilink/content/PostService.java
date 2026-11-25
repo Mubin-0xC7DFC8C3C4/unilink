@@ -60,9 +60,29 @@ public class PostService {
   @Transactional(readOnly=true)
   public FeedService.PostDto getPost(Long id, Principals.UnilinkUserPrincipal p){
     Post post = posts.findById(id).orElseThrow(() -> new Exceptions.NotFound("Post"));
-    if ("VERIFIED".equals(p.state())) return feedService.toDto(post);
+    if ("VERIFIED".equals(p.state())){
+      // D-201: a VERIFIED caller used to get ANY post with no visibility
+      // check, so a direct link (or a search-result link) opened a post
+      // that search/feed correctly hide. The same scope predicate as
+      // search/feed applies here: NATIONAL is open; UNIVERSITY needs the
+      // caller's university; DEPARTMENT needs the caller's university or
+      // department; DEPARTMENT_HUB needs the caller's catalog.
+      if (!isVisibleTo(post, p)) throw new Exceptions.NotFound("Post");
+      return feedService.toDto(post);
+    }
     if (!"NATIONAL".equals(post.getVisibility())) throw new Exceptions.NotFound("Post"); // D-016
     return feedService.toDto(post);
+  }
+  /** The search/feed scope predicate (D-201), shared with getPost. */
+  private boolean isVisibleTo(Post post, Principals.UnilinkUserPrincipal p){
+    return switch (post.getVisibility()){
+      case "NATIONAL" -> true;
+      case "UNIVERSITY" -> post.getScopeUniversityId()!=null && post.getScopeUniversityId().equals(p.universityId());
+      case "DEPARTMENT" -> (post.getScopeUniversityId()!=null && post.getScopeUniversityId().equals(p.universityId()))
+        || (post.getScopeDepartmentId()!=null && post.getScopeDepartmentId().equals(p.departmentId()));
+      case "DEPARTMENT_HUB" -> post.getScopeCatalogId()!=null && post.getScopeCatalogId().equals(p.catalogId());
+      default -> false;
+    };
   }
   @Transactional
   public ContentDtos.CommentDto addComment(Principals.UnilinkUserPrincipal p, Long postId, String body, List<Long> mentionUserIds){

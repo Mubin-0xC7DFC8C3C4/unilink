@@ -16,14 +16,16 @@ public class FeedService {
   private final CommentRepository comments; private final PostSectorTagRepository postSectors; private final SectorTagRepository sectors;
   private final ReactionRepository reactions; private final BookmarkRepository bookmarks; private final FollowRepository follows;
   private final UniversityRepository universities; private final DepartmentRepository departments; private final BatchRepository batches;
+  private final ConnectionRequestRepository connections;
   public FeedService(PostRepository posts, UserRepository users, EventDetailRepository events,
                      CommentRepository comments, PostSectorTagRepository postSectors, SectorTagRepository sectors,
                      ReactionRepository reactions, BookmarkRepository bookmarks, FollowRepository follows,
-                     UniversityRepository universities, DepartmentRepository departments, BatchRepository batches){
+                     UniversityRepository universities, DepartmentRepository departments, BatchRepository batches,
+                     ConnectionRequestRepository connections){
     this.posts=posts; this.users=users; this.events=events;
     this.comments=comments; this.postSectors=postSectors; this.sectors=sectors;
     this.reactions=reactions; this.bookmarks=bookmarks; this.follows=follows;
-    this.universities=universities; this.departments=departments; this.batches=batches; }
+    this.universities=universities; this.departments=departments; this.batches=batches; this.connections=connections; }
   @Transactional(readOnly=true)
   public PageResponse<PostDto> feed(Principals.UnilinkUserPrincipal p, String level, String cursor, int limit, Long sectorId){
     return feed(p, level, cursor, limit, sectorId, "recent");
@@ -33,7 +35,14 @@ public class FeedService {
     limit = Math.min(Math.max(limit,1),50);
     Specification<Post> spec;
     if ("VERIFIED".equals(p.state())){
-      spec = Specification.where(FeedSpecifications.statusActive())
+      // D-200: CONNECTIONS is a reader-side scope over the same
+      // visibility predicate as search — never a post visibility.
+      spec = "CONNECTIONS".equals(level)
+        ? Specification.where(FeedSpecifications.statusActive())
+          .and(FeedSpecifications.connections(p.userId(), new java.util.HashSet<>(connections.findAcceptedPartnerIds(p.userId())),
+            p.universityId(), p.departmentId(), p.catalogId()))
+          .and(FeedSpecifications.sector(sectorId)).and(FeedSpecifications.liveEventsOnly())
+        : Specification.where(FeedSpecifications.statusActive())
         .and(FeedSpecifications.level(level, p.universityId(), p.departmentId(), p.catalogId()))
         .and(FeedSpecifications.sector(sectorId)).and(FeedSpecifications.liveEventsOnly());
     } else {
@@ -44,13 +53,15 @@ public class FeedService {
     if ("top".equals(sort)){
       // Top ranking (2026-11-22 spec): score = (affinity + engagement) /
       // (hoursSinceCreated + 2)^1.5 over a bounded recent candidate set.
-      // Affinity: followed author +15, same department +10, same
-      // university +6. Engagement: comments*3 + saves*2 + reactions*1.
+      // Affinity: followed author +15, connected author +15 (D-200),
+      // same department +10, same university +6. Engagement:
+      // comments*3 + saves*2 + reactions*1.
       // Cursor pagination does not apply to a ranked list; the first
       // `limit` items are returned with no next cursor.
+      Set<Long> connectedIds = new java.util.HashSet<>(connections.findAcceptedPartnerIds(p.userId()));
       List<Post> candidates = new java.util.ArrayList<>(posts.findAll(spec, PageRequest.of(0, 200, Sort.by(Sort.Direction.DESC,"createdAt"))).getContent());
       LocalDateTime now = LocalDateTime.now();
-      candidates.sort((a, b) -> Double.compare(topScore(b, p, now), topScore(a, p, now)));
+      candidates.sort((a, b) -> Double.compare(topScore(b, p, now, connectedIds), topScore(a, p, now, connectedIds)));
       List<Post> result = candidates.size()>limit ? candidates.subList(0,limit) : candidates;
       return PageResponse.of(result.stream().map(post -> toDto(post, p.userId())).toList(), null);
     }
@@ -63,10 +74,11 @@ public class FeedService {
       next = CursorCodec.encode(last.getCreatedAt().atZone(java.time.ZoneOffset.UTC).toInstant().toEpochMilli(), last.getId()); }
     return PageResponse.of(result.stream().map(post -> toDto(post, p.userId())).toList(), next);
   }
-  private double topScore(Post post, Principals.UnilinkUserPrincipal p, LocalDateTime now){
+  private double topScore(Post post, Principals.UnilinkUserPrincipal p, LocalDateTime now, Set<Long> connectedIds){
     double affinity = 0;
     if (post.getAuthorId() != null){
       if (follows.existsByFollowerIdAndFollowedId(p.userId(), post.getAuthorId())) affinity += 15;
+      if (connectedIds.contains(post.getAuthorId())) affinity += 15;
       if (Objects.equals(post.getScopeDepartmentId(), p.departmentId())) affinity += 10;
       if (Objects.equals(post.getScopeUniversityId(), p.universityId())) affinity += 6;
     }

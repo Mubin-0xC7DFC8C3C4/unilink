@@ -42,7 +42,7 @@ describe('Layout header (owner decision 2026-11-20)', () => {
     for (const name of ['Feed', 'Events', 'Teams', 'Messages', 'Search', 'Notifications', 'Workspace', 'Settings']) {
       expect(screen.queryByRole('link', { name })).toBeNull();
     }
-    expect(screen.queryByPlaceholderText('Search people, posts, projects')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search people, posts, events')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Toggle sidebar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Account menu' })).toBeNull();
   });
@@ -56,7 +56,7 @@ describe('Layout header (owner decision 2026-11-20)', () => {
     expect(document.querySelector('.hdr-toggle')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'UniLink' })).toBeInTheDocument();
     // Centred global search bar with the reference placeholder.
-    expect(screen.getByPlaceholderText('Search people, posts, projects')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search people, posts, events')).toBeInTheDocument();
     // Icons only on the right: workspace grid (a link), notifications
     // bell and settings gear (buttons — the bell opens the notifications
     // popover and the gear opens the Settings modal; neither navigates
@@ -80,7 +80,7 @@ describe('Layout header (owner decision 2026-11-20)', () => {
     expect(screen.getByRole('link', { name: 'UniLink' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Sign up' })).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText('Search people, posts, projects')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search people, posts, events')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Workspace' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Notifications' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();
@@ -107,7 +107,7 @@ describe('Layout header (owner decision 2026-11-20)', () => {
     expect(screen.getByRole('link', { name: 'UniLink' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Sign up' })).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText('Search people, posts, projects')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search people, posts, events')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Workspace' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Notifications' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull();

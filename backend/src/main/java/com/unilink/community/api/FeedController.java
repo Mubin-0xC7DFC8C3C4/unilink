@@ -16,7 +16,7 @@ public class FeedController {
       @RequestParam(required=false) Long sector,
       @RequestParam(defaultValue="recent") String sort){
     var p = policy.requireStudent(a.getPrincipal());
-    if (!List.of("DEPARTMENT","UNIVERSITY","HUB","NATIONAL").contains(level))
+    if (!List.of("DEPARTMENT","UNIVERSITY","HUB","NATIONAL","CONNECTIONS").contains(level))
       throw new com.unilink.common.Exceptions.BadRequest("INVALID_LEVEL","Unknown feed level");
     if (!List.of("recent","top").contains(sort))
       throw new com.unilink.common.Exceptions.BadRequest("INVALID_SORT","Unknown sort");

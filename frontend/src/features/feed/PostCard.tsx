@@ -63,8 +63,8 @@ export const REACTIONS = [
 ] as const;
 export type ReactionKey = typeof REACTIONS[number]['key'];
 
-export interface UiReply { key: string; authorName: string; timeLabel?: string; body: string; liked: boolean }
-export interface UiComment { key: string; authorName: string; meta?: string; timeLabel?: string; body: string; liked: boolean; replies: UiReply[] }
+export interface UiReply { key: string; authorId?: number; authorName: string; timeLabel?: string; body: string; liked: boolean }
+export interface UiComment { key: string; authorId?: number; authorName: string; meta?: string; timeLabel?: string; body: string; liked: boolean; replies: UiReply[] }
 
 function relTime(iso?: string): string | undefined {
   if (!iso) return undefined;
@@ -176,7 +176,7 @@ export default function PostCard({ post, preview = false, sample, initiallySaved
     enabled: commentsOpen && !preview,
     retry: false,
   });
-  const realComments: { id?: number; authorName?: string; body: string; createdAt?: string; parentId?: number | null }[] = Array.isArray(commentsQ.data) ? commentsQ.data : (commentsQ.data?.items ?? []);
+  const realComments: { id?: number; authorId?: number; authorName?: string; body: string; createdAt?: string; parentId?: number | null }[] = Array.isArray(commentsQ.data) ? commentsQ.data : (commentsQ.data?.items ?? []);
   const addCommentMut = useMutation({
     mutationFn: async () => { const text = draft.trim(); await apiPost(`/posts/${post.id}/comments`, { body: text, mentionUserIds: [] as number[] }); return text; },
     onSuccess: () => { setDraft(''); setExtraComments((c) => c + 1); qc.invalidateQueries({ queryKey: ['post-comments', post.id] }); },
@@ -208,7 +208,7 @@ export default function PostCard({ post, preview = false, sample, initiallySaved
     } catch { /* the student dismissed the share sheet */ }
   };
 
-  const displayComments: UiComment[] = preview ? previewComments : realComments.filter((c) => !c.parentId).map((c, i) => { const key = String(c.id ?? `r${i}`); const replies: UiReply[] = realComments.filter((r) => r.parentId != null && String(r.parentId) === key).map((r) => ({ key: String(r.id), authorName: r.authorName || 'Student', timeLabel: relTime(r.createdAt), body: r.body, liked: likedComments.has(String(r.id)) })); return { key, authorName: c.authorName || 'Student', timeLabel: relTime(c.createdAt), body: c.body, liked: likedComments.has(key), replies }; });
+  const displayComments: UiComment[] = preview ? previewComments : realComments.filter((c) => !c.parentId).map((c, i) => { const key = String(c.id ?? `r${i}`); const replies: UiReply[] = realComments.filter((r) => r.parentId != null && String(r.parentId) === key).map((r) => ({ key: String(r.id), authorId: r.authorId, authorName: r.authorName || 'Student', timeLabel: relTime(r.createdAt), body: r.body, liked: likedComments.has(String(r.id)) })); return { key, authorId: c.authorId, authorName: c.authorName || 'Student', timeLabel: relTime(c.createdAt), body: c.body, liked: likedComments.has(key), replies }; });
   const replyTotal = displayComments.reduce((n, c) => n + c.replies.length, 0);
   const commentCount = preview ? previewComments.length + replyTotal : (post.commentCount ?? 0) + extraComments + replyTotal;
   const summaryEmojis = (() => { const list: string[] = []; const mine = REACTIONS.find((r) => r.key === reaction); if (mine) list.push(mine.emoji); if (!list.includes('👍')) list.push('👍'); if (likeCount >= 10 && !list.includes('💡')) list.push('💡'); return list.slice(0, 3); })();
@@ -247,7 +247,7 @@ export default function PostCard({ post, preview = false, sample, initiallySaved
       <div className="ch-card-head">
         <span className="ch-avatar" aria-hidden="true">{initials(post.authorName)}</span>
         <div className="ch-head-main">
-          <p className="ch-author"><span className="ch-author-name">{post.authorName}</span><VerifiedBadge /></p>
+          <p className="ch-author"><span className="ch-author-name">{post.authorId ? <Link to={`/profile/${post.authorId}`}>{post.authorName}</Link> : post.authorName}</span><VerifiedBadge /></p>
           {post.subtitle && <p className="ch-meta">{post.subtitle}</p>}
           <p className="ch-meta">{metaText}</p>
         </div>
@@ -327,7 +327,7 @@ export default function PostCard({ post, preview = false, sample, initiallySaved
                 <li key={c.key} className="ch-comment">
                   <span className="ch-avatar ch-avatar-sm" aria-hidden="true">{initials(c.authorName)}</span>
                   <div className="ch-comment-main">
-                    <p className="ch-comment-head"><strong>{c.authorName}</strong><VerifiedBadge /></p>
+                    <p className="ch-comment-head"><strong>{c.authorId ? <Link to={`/profile/${c.authorId}`}>{c.authorName}</Link> : c.authorName}</strong><VerifiedBadge /></p>
                     {(c.meta || c.timeLabel) && <p className="ch-meta">{[c.meta, c.timeLabel].filter(Boolean).join(' · ')}</p>}
                     <p className="ch-comment-body">{c.body}</p>
                     <div className="ch-comment-actions">
@@ -338,7 +338,7 @@ export default function PostCard({ post, preview = false, sample, initiallySaved
                       <li key={r.key} className="ch-comment">
                         <span className="ch-avatar ch-avatar-sm" aria-hidden="true">{initials(r.authorName)}</span>
                         <div className="ch-comment-main">
-                          <p className="ch-comment-head"><strong>{r.authorName}</strong><VerifiedBadge /></p>
+                          <p className="ch-comment-head"><strong>{r.authorId ? <Link to={`/profile/${r.authorId}`}>{r.authorName}</Link> : r.authorName}</strong><VerifiedBadge /></p>
                           {r.timeLabel && <p className="ch-meta">{r.timeLabel}</p>}
                           <p className="ch-comment-body">{r.body}</p>
                           <div className="ch-comment-actions">

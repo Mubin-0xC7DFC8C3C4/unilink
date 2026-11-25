@@ -60,7 +60,7 @@ class WorkerDControllerGuardsTest {
   @Test void unverifiedCannotSearch() {
     var service = mock(SearchService.class);
     var c = new SearchController(service, new AccessPolicy());
-    assertThrows(Exceptions.Forbidden.class, () -> c.search(authWith(unverified()), "dhaka", "all", null));
+    assertThrows(Exceptions.Forbidden.class, () -> c.search(authWith(unverified()), "dhaka", "all", null, null, null, 20));
     verifyNoInteractions(service);
   }
 
