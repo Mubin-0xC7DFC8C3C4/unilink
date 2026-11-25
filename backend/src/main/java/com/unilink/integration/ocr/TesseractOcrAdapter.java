@@ -35,8 +35,54 @@ public class TesseractOcrAdapter implements OcrProvider {
     Result back = backBytes == null ? new Result("", 0.0, "FAILED", null)
         : extract(backBytes, backName, fullName, studentId, universityName);
     String validity = backBytes == null ? null : extractValidity(backBytes);
-    return new TwoSidedResult(new SideResult(front.text(), front.confidence(), front.status()),
-        new SideResult(back.text(), back.confidence(), back.status()), validity);
+    // D-197: image-quality evidence for the plausibility check, measured
+    // on the raw uploaded bytes (preprocessing cannot add information).
+    // A missing back has no image to measure, so it stays unknown.
+    return new TwoSidedResult(new SideResult(front.text(), front.confidence(), front.status(),
+            computeQualitySignals(frontBytes)),
+        new SideResult(back.text(), back.confidence(), back.status(),
+            backBytes == null ? QualitySignals.unknown() : computeQualitySignals(backBytes)), validity);
+  }
+  /** D-197: image-quality signals for one side, from the decoded image.
+   *  Grayscale pixel standard deviation plus the share of sampled pixels
+   *  within ±4 grey levels of the modal value: a solid-white or
+   *  solid-colour image has stdDev ≈ 0 and a near-uniform share ≈ 1,
+   *  while any real card or photo varies far more. Bytes ImageIO cannot
+   *  decode (a corrupt file — or a WebP, which ImageIO cannot read but
+   *  Tesseract can) report decodable=false with no measurement; the
+   *  checker only treats undecodable as blank when nothing was readable
+   *  either, so a genuine WebP card is never failed on this signal.
+   *  At most ~200k pixels are sampled, so a 5 MB upload stays cheap.
+   *  Visible for testing. */
+  static QualitySignals computeQualitySignals(byte[] imageBytes){
+    if (imageBytes == null) return QualitySignals.unknown();
+    BufferedImage img;
+    try {
+      img = ImageIO.read(new ByteArrayInputStream(imageBytes));
+    } catch (Exception e){ return new QualitySignals(false, -1.0, -1.0); }
+    if (img == null) return new QualitySignals(false, -1.0, -1.0);
+    int w = img.getWidth(), h = img.getHeight();
+    if (w <= 0 || h <= 0) return new QualitySignals(false, -1.0, -1.0);
+    int step = Math.max(1, (int) Math.ceil(Math.sqrt((double) w * h / 200_000)));
+    int[] histogram = new int[256];
+    long count = 0, sum = 0, sumSq = 0;
+    for (int y = 0; y < h; y += step){
+      for (int x = 0; x < w; x += step){
+        int rgb = img.getRGB(x, y);
+        int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
+        histogram[gray]++;
+        sum += gray; sumSq += (long) gray * gray; count++;
+      }
+    }
+    if (count == 0) return new QualitySignals(false, -1.0, -1.0);
+    double mean = (double) sum / count;
+    double variance = (double) sumSq / count - mean * mean;
+    double stdDev = Math.sqrt(Math.max(0.0, variance));
+    int mode = 0;
+    for (int i = 1; i < 256; i++) if (histogram[i] > histogram[mode]) mode = i;
+    long nearMode = 0;
+    for (int i = Math.max(0, mode - 4); i <= Math.min(255, mode + 4); i++) nearMode += histogram[i];
+    return new QualitySignals(true, stdDev, (double) nearMode / count);
   }
   /** The validity strip, e.g. "July'23 - June'27". The prefix is
    *  deliberately tolerant: real Tesseract output misreads "Validity"

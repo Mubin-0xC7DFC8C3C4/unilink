@@ -51,7 +51,7 @@ async function toStep3(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByLabelText('Department'));
   await user.click(await screen.findByRole('option', { name: 'CSE' }));
   await user.type(screen.getByLabelText('Batch / Session'), '45');
-  await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
+  await user.type(screen.getByLabelText('Your address'), '123 Test Road, Dhaka');
   await user.click(screen.getByRole('button', { name: /Continue/ }));
   await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
 }
@@ -176,7 +176,7 @@ describe('SignUp page (2026-11-25 upgrade)', () => {
     await user.click(screen.getByRole('button', { name: /type it instead/ }));
     await user.type(screen.getByLabelText('Department'), 'Robotics and Mechatronics');
     await user.type(screen.getByLabelText('Batch / Session'), 'Fall 2024');
-    await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
+    await user.type(screen.getByLabelText('Your address'), '123 Test Road, Dhaka');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');

@@ -369,7 +369,6 @@ class RepositoryServiceAuditTest {
     form.setAddress("Dhaka"); form.setStudentId("DELREPRO1"); form.setPassword("Student123");
     form.setIdCard(new org.springframework.mock.web.MockMultipartFile("idCard", "id.png", "image/png", PNG));
     form.setIdCardBack(new org.springframework.mock.web.MockMultipartFile("idCardBack", "id-back.png", "image/png", new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 9, 8, 7, 6}));
-    form.setProfilePhoto(new org.springframework.mock.web.MockMultipartFile("profilePhoto", "photo.png", "image/png", PNG));
     var dto = auth.register(form);
     Long id = dto.id();
     assertTrue(users.findById(id).isPresent());

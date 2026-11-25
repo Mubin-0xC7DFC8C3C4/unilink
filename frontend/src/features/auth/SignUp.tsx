@@ -6,8 +6,10 @@ import { Button, Field, Input, PageHeader } from '../../design/primitives';
 import { SearchableSelect } from './SearchableSelect';
 /** FR-AUTH-01/02 (owner brief 2026-11-25 §1/§2): the ten registration
  *  fields — full name, personal email, phone, university, department,
- *  batch, university address, student ID, password, and TWO student ID
- *  card images (front + back, D-190). The profile photo is NOT collected
+ *  batch, address, student ID, password, and TWO student ID
+ *  card images (front + back, D-190). The address may be any valid
+ *  address (D-196): university, present, permanent or home — it is
+ *  never required to match the university's location. The profile photo is NOT collected
  *  here any more (D-178): students upload it from Settings → Edit
  *  Profile after logging in. Batch is free text (D-194): the user types
  *  it ("44", "2022-23", "Fall 2024") — the old batch dropdown is gone.
@@ -28,7 +30,7 @@ export const signUpSchema = z.object({
   departmentId: z.number().optional(),
   departmentLabel: z.string().max(255, 'Department must be 255 characters or fewer.').refine((v) => v === '' || DEPARTMENT_LABEL_RE.test(v), 'Department may only contain letters, digits, spaces and - / . ( ) , &').optional(),
   batch: z.string().min(1, 'Please enter your batch/session.').max(32, 'Batch/session must be 32 characters or fewer.').regex(BATCH_RE, 'Batch/session may only contain letters, digits, spaces, hyphens, slashes, dots or parentheses'),
-  address: z.string().min(1, 'University address is required.').min(5, 'Enter your university address'),
+  address: z.string().min(1, 'Your address is required.').min(5, 'Enter your address'),
   studentId: z.string().min(1, 'Student ID number is required.'),
   password: z.string().min(8, 'Password must be at least 8 characters').regex(/[A-Z]/, 'Password needs an uppercase letter').regex(/[a-z]/, 'Password needs a lowercase letter').regex(/[0-9]/, 'Password needs a digit'),
   confirmPassword: z.string().min(1, 'Re-enter your password'),
@@ -233,8 +235,8 @@ export default function SignUp(){
         <Input id="batch" {...register('batch')} placeholder="e.g. 44, 2022-23, Fall 2024" autoComplete="off" aria-invalid={!!errors.batch} aria-describedby={errors.batch ? 'batch-error' : undefined} />
         <p className="body-sm secondary" style={{ margin: '6px 0 0' }}>Type your batch or session exactly as it appears on your ID card, if it is printed there.</p>
       </Field>
-      <Field label="University Address" error={errors.address?.message} valid={textValid('address', address)} validText="Looks good" htmlFor="address">
-        <Input id="address" {...register('address')} autoComplete="street-address" placeholder="Enter your university campus address as shown on your ID card" aria-invalid={!!errors.address} aria-describedby={errors.address ? 'address-error' : undefined} />
+      <Field label="Your address" error={errors.address?.message} valid={textValid('address', address)} validText="Looks good" htmlFor="address">
+        <Input id="address" {...register('address')} autoComplete="street-address" placeholder="Enter your address" aria-invalid={!!errors.address} aria-describedby={errors.address ? 'address-error' : undefined} />
       </Field>
     </>}
     {step === 2 && <>

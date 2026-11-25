@@ -12,9 +12,26 @@ public interface OcrProvider {
   default Result extract(byte[] imageBytes, String fileName, String fullName, String studentId, String universityName){
     return extract(imageBytes, fileName, fullName, studentId);
   }
+  /** D-197: image-quality evidence for one side, measured by the
+   *  adapter from the decoded image (pixel standard deviation / the
+   *  share of pixels near the modal grey value). {@link #unknown()} is
+   *  the "no signal" value for fakes and for sides with no image: the
+   *  plausibility check treats it as neutral, never as blank. A
+   *  negative stdDev means "no measurement was made". */
+  record QualitySignals(boolean decodable, double pixelStdDev, double nearUniformShare) {
+    public static QualitySignals unknown(){ return new QualitySignals(true, -1.0, -1.0); }
+    /** True when the adapter measured something: a decodable image with
+     *  a pixel measurement, or an undecodable one (decodable=false is
+     *  itself evidence). Only {@link #unknown()} has no signal. */
+    public boolean hasSignal(){ return !decodable || pixelStdDev >= 0; }
+  }
   /** One side of a two-sided ID card: OCR text, mean word confidence,
-   *  and the engine status (DONE / FAILED). */
-  record SideResult(String text, Double confidence, String status) {}
+   *  the engine status (DONE / FAILED), and the image-quality signals
+   *  (D-197). The 3-arg form keeps existing fakes working with an
+   *  unknown (neutral) quality signal. */
+  record SideResult(String text, Double confidence, String status, QualitySignals quality) {
+    public SideResult(String text, Double confidence, String status){ this(text, confidence, status, QualitySignals.unknown()); }
+  }
   /** Both sides of an ID card plus the validity string read from the
    *  back's vertical strip (e.g. "July'23 - June'27"), or null when the
    *  strip could not be read. The validity is best-effort evidence only;
@@ -30,10 +47,13 @@ public interface OcrProvider {
   default TwoSidedResult extractTwoSided(byte[] frontBytes, byte[] backBytes, String frontName, String backName,
                                          String fullName, String studentId, String universityName){
     Result front = extract(frontBytes, frontName, fullName, studentId, universityName);
+    // D-197: the fake has no decoded image to measure, so both sides
+    // carry an unknown (neutral) quality signal — the plausibility
+    // check never treats a fake side as blank.
     SideResult back = backBytes == null
-        ? new SideResult("", null, "FAILED")
-        : new SideResult(universityName == null ? "" : universityName, 95.0, "DONE");
-    return new TwoSidedResult(new SideResult(front.text(), front.confidence(), front.status()), back, null);
+        ? new SideResult("", null, "FAILED", QualitySignals.unknown())
+        : new SideResult(universityName == null ? "" : universityName, 95.0, "DONE", QualitySignals.unknown());
+    return new TwoSidedResult(new SideResult(front.text(), front.confidence(), front.status(), QualitySignals.unknown()), back, null);
   }
   class ProviderException extends RuntimeException { public ProviderException(String m, Throwable t){ super(m,t); } }
 }

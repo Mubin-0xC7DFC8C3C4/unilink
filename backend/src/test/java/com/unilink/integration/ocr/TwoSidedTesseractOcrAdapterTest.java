@@ -1,5 +1,6 @@
 package com.unilink.integration.ocr;
 
+import com.unilink.identity.service.CardPlausibilityChecker;
 import com.unilink.identity.service.IdCardMatcher;
 import org.junit.jupiter.api.Test;
 import java.awt.*;
@@ -96,6 +97,31 @@ class TwoSidedTesseractOcrAdapterTest {
         r.back().text(), r.back().confidence(), r.validity(), "59", SUBJECT);
     assertEquals(IdCardMatcher.Outcome.MANUAL_REVIEW, decision.outcome(),
         "a missing back must never auto-verify");
+  }
+  /** A solid-white front image, rendered in-test (synthetic). */
+  static byte[] solidWhiteImage() throws Exception {
+    BufferedImage img = new BufferedImage(800, 500, BufferedImage.TYPE_INT_RGB);
+    Graphics2D g = img.createGraphics();
+    g.setColor(Color.WHITE); g.fillRect(0, 0, 800, 500);
+    g.dispose();
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    assertTrue(ImageIO.write(img, "png", out));
+    return out.toByteArray();
+  }
+  @Test void solidWhiteFrontImageFailsAsBlankThroughRealOcr() throws Exception {
+    // D-197 end to end: the adapter measures the blank front, the
+    // matcher fails it with REASON_BLANK_IMAGE (never MANUAL_REVIEW),
+    // and the valid back cannot rescue it.
+    var adapter = new TesseractOcrAdapter("eng");
+    OcrProvider.TwoSidedResult r = adapter.extractTwoSided(solidWhiteImage(), backImage(), "id.png", "id-back.png",
+        "Tanvir Mahmud", "232-115-310", "Metropolitan University");
+    assertTrue(new CardPlausibilityChecker().isBlankImage(r.front().quality(), r.front().text()),
+        "a solid-white front must carry blank quality signals");
+    assertFalse(new CardPlausibilityChecker().isBlankImage(r.back().quality(), r.back().text()),
+        "the genuine back must not read as blank");
+    var decision = new IdCardMatcher().matchTwoSided(r.front(), r.back(), r.validity(), "59", SUBJECT);
+    assertEquals(IdCardMatcher.Outcome.VERIFICATION_FAILED, decision.outcome());
+    assertEquals(IdCardMatcher.REASON_BLANK_IMAGE, decision.reason());
   }
   @Test void rotate90CcwSwapsDimensionsAndFindValidityToleratesMisreads(){
     // A 200x100 image rotated 90 degrees CCW becomes 100x200.

@@ -1,4 +1,5 @@
 package com.unilink.identity.service;
+import com.unilink.integration.ocr.OcrProvider;
 import org.springframework.stereotype.Component;
 import java.util.*;
 
@@ -16,15 +17,37 @@ public class IdCardMatcher {
                         String departmentName, String departmentShortName, String address) {}
   public enum Outcome { AUTO_VERIFIED, VERIFICATION_FAILED, MANUAL_REVIEW }
   public enum DepartmentResult { MATCHED, NEUTRAL, MISMATCH }
+  /** D-196: addressConflict is admin-only evidence, never a decision
+   *  driver — the gazetteer conflict is still computed (front and back
+   *  combined) so the admin queue can show ADDRESS_EVIDENCE_NOTE, but
+   *  it cannot block AUTO_VERIFIED or select a MANUAL_REVIEW reason.
+   *  The 7-arg form keeps older callers working with "no conflict". */
   public record Decision(Outcome outcome, String reason, double compositeScore,
                          boolean idMatched, double nameSimilarity, boolean universityMatched,
-                         DepartmentResult department) {}
+                         DepartmentResult department, boolean addressConflict) {
+    Decision(Outcome outcome, String reason, double compositeScore,
+             boolean idMatched, double nameSimilarity, boolean universityMatched,
+             DepartmentResult department){
+      this(outcome, reason, compositeScore, idMatched, nameSimilarity, universityMatched, department, false);
+    }
+  }
 
   public static final String REASON_ID = "Student ID number could not be matched with the uploaded ID card.";
   public static final String REASON_NAME = "Your name could not be reliably matched. Please upload a clearer image.";
   public static final String REASON_UNIVERSITY = "University name does not match the uploaded ID card.";
   public static final String REASON_DEPARTMENT = "Department information could not be verified.";
+  /** D-196: no longer a decision reason — an address mismatch is NOT an
+   *  identity mismatch and never gates auto-verification. Retained so
+   *  older reason strings stay resolvable; see ADDRESS_EVIDENCE_NOTE. */
   public static final String REASON_ADDRESS = "University address could not be matched.";
+  /** D-196: admin-queue evidence wording for Decision.addressConflict. */
+  public static final String ADDRESS_EVIDENCE_NOTE = "Card address differs from entered address — check manually.";
+  /** D-197: the uploaded image is blank or corrupt (quality rule). */
+  public static final String REASON_BLANK_IMAGE =
+      "The uploaded image appears to be blank. Please upload a clear photo of your student ID card.";
+  /** D-197: substantial text with no card markers and no field matches. */
+  public static final String REASON_NOT_ID_CARD =
+      "The uploaded image does not appear to be a student ID card. Please upload the front and back of your student ID card.";
   public static final String REASON_UNCLEAR = "The ID card image is unclear. Please upload a sharper image.";
   public static final String REASON_INCONCLUSIVE = "We could not verify your ID card automatically. An administrator will review your application.";
   /** D-191: back-side reasons. */
@@ -35,7 +58,9 @@ public class IdCardMatcher {
   public static final String REASON_EXPIRED = "The ID card appears to be expired. An administrator will review your application.";
 
   private static final double NAME_AUTO_THRESHOLD = 0.75;
-  private static final double NAME_HARD_FAIL = 0.50;
+  /** Shared with CardPlausibilityChecker (D-197): below this, a name
+   *  similarity counts as no field match for the not-an-ID-card rule. */
+  static final double NAME_HARD_FAIL = 0.50;
   private static final double MIN_CONFIDENCE = 50.0;
   private static final double UNCLEAR_CONFIDENCE = 35.0;
   private static final int MIN_OCR_TEXT = 10;
@@ -174,70 +199,105 @@ public class IdCardMatcher {
         + (dept == DepartmentResult.MATCHED ? 0.1 : dept == DepartmentResult.NEUTRAL ? 0.05 : 0.0);
 
     if (idMatched && nameSim >= NAME_AUTO_THRESHOLD && uniMatched && dept != DepartmentResult.MISMATCH
-        && !addressConflict && confidenceOk)
-      return new Decision(Outcome.AUTO_VERIFIED, null, composite, true, nameSim, true, dept);
+        && confidenceOk)
+      return new Decision(Outcome.AUTO_VERIFIED, null, composite, true, nameSim, true, dept, addressConflict);
 
     boolean substantial = stripped.length() >= SUBSTANTIAL_OCR_TEXT;
     boolean idFail = !idMatched, nameFail = nameSim < NAME_HARD_FAIL, uniFail = uniConflict;
     int hardFails = (idFail ? 1 : 0) + (nameFail ? 1 : 0) + (uniFail ? 1 : 0);
     if (substantial && hardFails >= 2){
       String reason = idFail ? REASON_ID : nameFail ? REASON_NAME : REASON_UNIVERSITY;
-      return new Decision(Outcome.VERIFICATION_FAILED, reason, composite, idMatched, nameSim, uniMatched, dept);
+      return new Decision(Outcome.VERIFICATION_FAILED, reason, composite, idMatched, nameSim, uniMatched, dept, addressConflict);
     }
     String reason;
     if (!idMatched) reason = REASON_ID;
     else if (nameSim < NAME_AUTO_THRESHOLD) reason = REASON_NAME;
     else if (!uniMatched) reason = REASON_UNIVERSITY;
     else if (dept == DepartmentResult.MISMATCH) reason = REASON_DEPARTMENT;
-    else if (addressConflict) reason = REASON_ADDRESS;
     else reason = REASON_INCONCLUSIVE;
-    return new Decision(Outcome.MANUAL_REVIEW, reason, composite, idMatched, nameSim, uniMatched, dept);
+    return new Decision(Outcome.MANUAL_REVIEW, reason, composite, idMatched, nameSim, uniMatched, dept, addressConflict);
   }
 
-  /** Both sides of the card, combined (D-191). The front carries the
-   *  auto-verify gates (ID, name, university, department, address,
-   *  confidence); the back is consistency evidence (university, address,
-   *  readability) plus the same-side-twice, batch and validity signals.
-   *  A VERIFICATION_FAILED front is returned as-is — the back cannot
+  /** The plausibility check (D-197), shared by both two-sided paths. */
+  private final CardPlausibilityChecker plausibility = new CardPlausibilityChecker();
+
+  /** Both sides of the card, combined (D-191, D-196, D-197). The front
+   *  carries the auto-verify gates (ID, name, university, department,
+   *  confidence — address is NOT a gate any more); the back is
+   *  consistency evidence (university, readability) plus the
+   *  same-side-twice, batch and validity signals. The address conflict
+   *  (front or back) is computed but only recorded as admin evidence on
+   *  the Decision — it can never block AUTO_VERIFIED. A
+   *  VERIFICATION_FAILED front is returned as-is — the back cannot
    *  rescue a card whose front data contradicts the registration. When
    *  the front would auto-verify, every back gate must also pass; when
    *  the front is already MANUAL_REVIEW, a same-side or back-university
    *  signal is more actionable than the front reason and wins. A weak
    *  name similarity never overrides a conflicting student ID: the ID
-   *  match is a hard gate for AUTO_VERIFIED. */
+   *  match is a hard gate for AUTO_VERIFIED. The 7-arg form carries
+   *  unknown (neutral) quality signals, so existing callers and fakes
+   *  are unaffected by the D-197 quality rule. */
   public Decision matchTwoSided(String frontText, Double frontConfidence, String backText, Double backConfidence,
                                 String validity, String batch, Subject subject){
+    return matchTwoSided(new OcrProvider.SideResult(frontText, frontConfidence, "DONE"),
+        new OcrProvider.SideResult(backText, backConfidence, "DONE"), validity, batch, subject);
+  }
+  /** The two-sided path with image-quality evidence (D-197). The
+   *  quality rule runs before field matching: a blank/corrupt image on
+   *  either side fails outright. The marker rule runs on the front
+   *  decision: substantial text with no card markers and no field
+   *  matches is clearly not an ID card. */
+  public Decision matchTwoSided(OcrProvider.SideResult frontSide, OcrProvider.SideResult backSide,
+                                String validity, String batch, Subject subject){
+    String frontText = frontSide == null || frontSide.text() == null ? "" : frontSide.text();
+    String backText = backSide == null || backSide.text() == null ? "" : backSide.text();
+    Double frontConfidence = frontSide == null ? null : frontSide.confidence();
+    Double backConfidence = backSide == null ? null : backSide.confidence();
+    if (plausibility.isBlankImage(frontSide == null ? null : frontSide.quality(), frontText)
+        || plausibility.isBlankImage(backSide == null ? null : backSide.quality(), backText))
+      return new Decision(Outcome.VERIFICATION_FAILED, REASON_BLANK_IMAGE, 0.0,
+          false, 0.0, false, DepartmentResult.NEUTRAL, false);
     Decision front = match(frontText, frontConfidence, subject);
-    if (front.outcome() == Outcome.VERIFICATION_FAILED) return front;
-    String back = backText == null ? "" : backText;
-    List<String> backTokens = tokens(back);
+    if (plausibility.isClearlyNotIdCard(frontText, backText, front.idMatched(),
+        front.nameSimilarity(), front.universityMatched()))
+      return new Decision(Outcome.VERIFICATION_FAILED, REASON_NOT_ID_CARD, front.compositeScore(),
+          front.idMatched(), front.nameSimilarity(), front.universityMatched(), front.department(),
+          front.addressConflict());
+    // Back evidence is parsed before the front-failed early return, so
+    // the address-conflict evidence flag covers both sides either way.
+    List<String> backTokens = tokens(backText);
     Set<String> backSet = new HashSet<>(backTokens);
-    boolean backUnreadable = back.replaceAll("\\s+", "").length() < MIN_OCR_TEXT
+    boolean backUnreadable = backText.replaceAll("\\s+", "").length() < MIN_OCR_TEXT
         || (backConfidence != null && backConfidence < UNCLEAR_CONFIDENCE);
-    boolean backSameSide = matchId(back, subject.studentId())
+    boolean backSameSide = matchId(backText, subject.studentId())
         && matchName(backTokens, subject.fullName()) >= NAME_AUTO_THRESHOLD;
     boolean backUniMatched = matchUniversity(backSet, subject.universityName());
     boolean backUniConflict = universityConflict(backSet, subject.universityName());
-    boolean backAddressConflict = addressConflict(backSet, subject.address());
+    boolean addressConflict = front.addressConflict() || addressConflict(backSet, subject.address());
+    if (front.outcome() == Outcome.VERIFICATION_FAILED) return withAddressConflict(front, addressConflict);
     BatchResult batchResult = compareBatch(extractBatch(frontText), batch);
     boolean expired = isExpired(validity);
     if (front.outcome() == Outcome.AUTO_VERIFIED){
-      if (backSameSide) return manual(front, REASON_SAME_SIDE);
-      if (backUnreadable) return manual(front, REASON_BACK_UNREADABLE);
-      if (backUniConflict) return manual(front, REASON_BACK_UNIVERSITY);
-      if (!backUniMatched) return manual(front, REASON_UNIVERSITY);
-      if (backAddressConflict) return manual(front, REASON_ADDRESS);
-      if (batchResult == BatchResult.CONFLICT) return manual(front, REASON_BATCH);
-      if (expired) return manual(front, REASON_EXPIRED);
-      return front;
+      if (backSameSide) return manual(front, REASON_SAME_SIDE, addressConflict);
+      if (backUnreadable) return manual(front, REASON_BACK_UNREADABLE, addressConflict);
+      if (backUniConflict) return manual(front, REASON_BACK_UNIVERSITY, addressConflict);
+      if (!backUniMatched) return manual(front, REASON_UNIVERSITY, addressConflict);
+      if (batchResult == BatchResult.CONFLICT) return manual(front, REASON_BATCH, addressConflict);
+      if (expired) return manual(front, REASON_EXPIRED, addressConflict);
+      return withAddressConflict(front, addressConflict);
     }
-    if (backSameSide) return manual(front, REASON_SAME_SIDE);
-    if (backUniConflict) return manual(front, REASON_BACK_UNIVERSITY);
-    return front;
+    if (backSameSide) return manual(front, REASON_SAME_SIDE, addressConflict);
+    if (backUniConflict) return manual(front, REASON_BACK_UNIVERSITY, addressConflict);
+    return withAddressConflict(front, addressConflict);
   }
-  private static Decision manual(Decision front, String reason){
+  private static Decision manual(Decision front, String reason, boolean addressConflict){
     return new Decision(Outcome.MANUAL_REVIEW, reason, front.compositeScore(),
-        front.idMatched(), front.nameSimilarity(), front.universityMatched(), front.department());
+        front.idMatched(), front.nameSimilarity(), front.universityMatched(), front.department(), addressConflict);
+  }
+  private static Decision withAddressConflict(Decision decision, boolean addressConflict){
+    return new Decision(decision.outcome(), decision.reason(), decision.compositeScore(),
+        decision.idMatched(), decision.nameSimilarity(), decision.universityMatched(), decision.department(),
+        addressConflict);
   }
 
   /** Batch/session printed on the card, from the front programme line:

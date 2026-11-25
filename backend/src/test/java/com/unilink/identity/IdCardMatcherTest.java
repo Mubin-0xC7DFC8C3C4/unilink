@@ -105,11 +105,15 @@ class IdCardMatcherTest {
     assertEquals(Outcome.AUTO_VERIFIED, new IdCardMatcher().match(noDept, 90.0, SUBJECT).outcome(),
         "a card without department evidence still verifies on ID + name + university");
   }
-  @Test void addressConflictDowngradesToReview(){
+  @Test void addressConflictNoLongerGatesAutoVerify(){
+    // D-196: the submitted address may be any valid address — a card
+    // address in a different city from the registered (home) address is
+    // evidence for the admin queue only, never a downgrade.
     String sylhet = CARD.replace("Dhanmondi, Dhaka", "Zindabazar, Sylhet");
     Decision d = new IdCardMatcher().match(sylhet, 90.0, SUBJECT);
-    assertEquals(Outcome.MANUAL_REVIEW, d.outcome());
-    assertEquals(IdCardMatcher.REASON_ADDRESS, d.reason());
+    assertEquals(Outcome.AUTO_VERIFIED, d.outcome());
+    assertTrue(d.addressConflict(), "the gazetteer conflict is still computed as admin evidence");
+    assertNull(d.reason());
   }
   @Test void emptyTextAndLowConfidenceAreUnclear(){
     Decision empty = new IdCardMatcher().match("  \n ", 90.0, SUBJECT);

@@ -258,7 +258,6 @@ class Phase3WorkerDTest {
     form.setDepartmentId(f.muCse().getId()); form.setBatch("44");
     form.setAddress("Dhaka"); form.setStudentId("D3NEW1"); form.setPassword("Student123");
     form.setIdCard(new MockMultipartFile("idCard", "id.png", "image/png", PNG));
-    form.setProfilePhoto(new MockMultipartFile("profilePhoto", "photo.png", "image/png", PNG));
     assertThrows(Exceptions.Forbidden.class, () -> auth.register(form));
     assertTrue(users.findByEmail("d3-newsusp@example.com").isEmpty());
   }

@@ -127,28 +127,24 @@ public class AuthService {
     // front, in the same id-cards namespace, under its own key.
     String backType = uploads.validateImage(backBytes, UploadValidator.ID_CARD_MAX, form.getIdCardBack().getContentType());
     String idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCardBack().getOriginalFilename()), backType, ExifStripper.strip(backBytes));
-    // D-178: the profile photo is no longer collected at registration —
+    // D-178/D-197: no profile photo is collected at registration —
     // students upload it from Settings → Edit Profile after logging in.
-    // The part is still accepted (old clients, and the Settings flow
-    // reuses the same storage) and stored when present.
-    String photoKey = null;
-    if (form.getProfilePhoto()!=null && !form.getProfilePhoto().isEmpty()){
-      byte[] photoBytes = bytes(form.getProfilePhoto());
-      String photoType = uploads.validateImage(photoBytes, UploadValidator.PHOTO_MAX, form.getProfilePhoto().getContentType());
-      photoKey = storage.store("profile-photos", UploadValidator.sanitizeFileName(form.getProfilePhoto().getOriginalFilename()), photoType, ExifStripper.strip(photoBytes));
-    }
+    // RegisterForm has no profilePhoto part any more (backend-enforced):
+    // a photo part sent by an old client is ignored by binding, and
+    // nothing is stored. User/VerificationRequest profilePhotoKey stay
+    // null for a fresh registration.
     User u = new User();
     u.setUniversityId(uni.getId()); u.setDepartmentId(dept == null ? null : dept.getId()); u.setDepartmentLabel(departmentLabel);
     u.setBatchId(null); u.setBatchLabel(batchLabel);
     u.setFullName(form.getFullName()); u.setEmail(form.getEmail()); u.setPhone(form.getPhone());
     u.setAddress(form.getAddress()); u.setStudentId(form.getStudentId());
-    u.setState(AccountState.REGISTERED.name()); u.setIdCardKey(idKey); u.setIdCardBackKey(idBackKey); u.setProfilePhotoKey(photoKey);
+    u.setState(AccountState.REGISTERED.name()); u.setIdCardKey(idKey); u.setIdCardBackKey(idBackKey); u.setProfilePhotoKey(null);
     u = users.save(u);
     UserCredential c = new UserCredential(); c.setId(u.getId()); c.setPasswordHash(encoder.encode(form.getPassword())); creds.save(c);
     Profile p = new Profile(); p.setId(u.getId()); p.setPhoneVisible(false); profiles.save(p);
     VerificationRequest req = new VerificationRequest();
     req.setUserId(u.getId()); req.setStatus("AWAITING_VERIFICATION"); req.setOcrStatus("PENDING");
-    req.setIdCardKey(idKey); req.setIdCardBackKey(idBackKey); req.setProfilePhotoKey(photoKey);
+    req.setIdCardKey(idKey); req.setIdCardBackKey(idBackKey); req.setProfilePhotoKey(null);
     // D-175: the registration token scopes the status / email-OTP
     // endpoints. Only the hash is stored; the plaintext is returned once
     // in the register response. It expires after 24 hours.
@@ -402,6 +398,9 @@ public class AuthService {
     if (idCard!=null && !idCard.isEmpty()){
       newFrontBytes = bytes(idCard);
       String type = uploads.validateImage(newFrontBytes, UploadValidator.ID_CARD_MAX, idCard.getContentType());
+      // D-197: a front-only re-upload must not be the stored back image
+      // (the both-new check below only covers re-uploading both sides).
+      if (idCardBack==null || idCardBack.isEmpty()) checkSingleSideNotSameImage(newFrontBytes, u.getIdCardBackKey());
       // D-106: strip EXIF before storing. The previous key is NOT deleted here:
       // the rejected attempt's VerificationRequest row still references it, and
       // D-053 keeps rejected ID images for 30 days to support appeal; the
@@ -415,6 +414,9 @@ public class AuthService {
     if (idCardBack!=null && !idCardBack.isEmpty()){
       newBackBytes = bytes(idCardBack);
       String type = uploads.validateImage(newBackBytes, UploadValidator.ID_CARD_MAX, idCardBack.getContentType());
+      // D-197: mirror of the front-only check above — a back-only
+      // re-upload must not be the stored front image.
+      if (idCard==null || idCard.isEmpty()) checkSingleSideNotSameImage(newBackBytes, u.getIdCardKey());
       idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(idCardBack.getOriginalFilename()), type, ExifStripper.strip(newBackBytes));
       u.setIdCardBackKey(idBackKey);
     }
@@ -441,6 +443,23 @@ public class AuthService {
       ? new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), uniName, u.getDepartmentLabel(), null, u.getAddress())
       : ocrSubject(u, uniName, dept, u.getDepartmentLabel()), u.getBatchLabel());
     return toDto(u, false, null, verificationToken);
+  }
+  /** D-197: a single re-uploaded side must not be byte-identical to the
+   *  stored opposite side (the both-new check in resubmit only covers
+   *  re-uploading both sides at once). The new bytes are EXIF-stripped
+   *  first, because the stored bytes are the stripped ones — comparing
+   *  raw new bytes against stripped stored bytes would miss the same
+   *  image whenever the original carried EXIF. A missing stored key or
+   *  an unreadable stored object means "cannot compare", not a failure:
+   *  the resubmission proceeds and the matcher still sees the images. */
+  private void checkSingleSideNotSameImage(byte[] newBytes, String storedOppositeKey){
+    if (newBytes == null || storedOppositeKey == null) return;
+    byte[] stored;
+    try { stored = storage.open(storedOppositeKey).readAllBytes(); }
+    catch (Exception e){ return; }
+    if (stored == null) return;
+    if (java.util.Arrays.equals(Hashing.sha256Bytes(ExifStripper.strip(newBytes)), Hashing.sha256Bytes(stored)))
+      throw new Exceptions.BadRequest("ID_CARD_SAME_IMAGE","The front and back images are identical. Please upload the front and the back of your ID card.");
   }
   /** Resolves a registration by its token (D-175). Unknown, malformed and
    *  expired tokens all answer the same 404 — the token is a random

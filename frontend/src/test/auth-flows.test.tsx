@@ -77,7 +77,7 @@ describe('SignUp (I-6)', () => {
     await user.click(screen.getByLabelText('Department'));
     await user.click(await screen.findByRole('option', { name: 'CSE' }));
     await user.type(screen.getByLabelText('Batch / Session'), '45');
-    await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
+    await user.type(screen.getByLabelText('Your address'), '123 Test Road, Dhaka');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');

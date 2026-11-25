@@ -41,17 +41,17 @@ public class VerificationDecisionService {
   /** D-191: the two-sided path. The front and back OCR texts are both
    *  stored on the request (the admin queue exposes both), and the
    *  matcher combines them with the batch and validity evidence. The
-   *  state machine is unchanged: AUTO_VERIFIED leaves the request alone
-   *  until the email OTP completes, MANUAL_REVIEW moves it to
-   *  PENDING_REVIEW, VERIFICATION_FAILED rejects it. */
+   *  matcher receives the full SideResults (D-197) so the image-quality
+   *  signals reach the plausibility check. The state machine is
+   *  unchanged: AUTO_VERIFIED leaves the request alone until the email
+   *  OTP completes, MANUAL_REVIEW moves it to PENDING_REVIEW,
+   *  VERIFICATION_FAILED rejects it. */
   @Transactional
   public AppliedOutcome applyTwoSidedOcrOutcome(Long requestId, OcrProvider.TwoSidedResult result,
                                                 IdCardMatcher.Subject subject, String batch){
     VerificationRequest req = requests.findById(requestId).orElseThrow(() -> new IllegalArgumentException("Unknown verification request " + requestId));
     IdCardMatcher.Decision decision = matcher.matchTwoSided(
-        result.front().text(), result.front().confidence(),
-        result.back().text(), result.back().confidence(),
-        result.validity(), batch, subject);
+        result.front(), result.back(), result.validity(), batch, subject);
     req.setOcrText(result.front().text());
     req.setOcrTextBack(result.back().text());
     req.setOcrMatchScore(decision.compositeScore());

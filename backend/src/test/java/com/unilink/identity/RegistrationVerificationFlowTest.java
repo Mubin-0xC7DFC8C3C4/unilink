@@ -54,6 +54,10 @@ class RegistrationVerificationFlowTest {
 
   /** Registers without a profile photo; returns the registration token. */
   private String register(String tag, String email) throws Exception {
+    return registerWithAddress(tag, email, "House 12, Road 5, Dhanmondi, Dhaka");
+  }
+  /** Same journey with an explicit address (D-196: any valid address). */
+  private String registerWithAddress(String tag, String email, String address) throws Exception {
     var f = factory.seedMaster();
     MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", PNG);
     MockMultipartFile idCardBack = new MockMultipartFile("idCardBack", "id-back.jpg", "image/jpeg", PNG_BACK);
@@ -61,7 +65,7 @@ class RegistrationVerificationFlowTest {
         .param("fullName", "Tanvir Mahmud").param("phone", "01712345678").param("email", email)
         .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
         .param("batch", "44")
-        .param("address", "House 12, Road 5, Dhanmondi, Dhaka")
+        .param("address", address)
         .param("studentId", "RV-" + tag + "-" + System.nanoTime()).param("password", "Password1"))
       .andExpect(status().isCreated())
       .andExpect(jsonPath("$.id").exists())
@@ -156,17 +160,39 @@ class RegistrationVerificationFlowTest {
       .andExpect(status().isBadRequest())
       .andExpect(jsonPath("$.code").value("OTP_NOT_FOUND"));
   }
-  @Test void registrationStillAcceptsAnOptionalProfilePhoto() throws Exception {
+  @Test void registrationIgnoresProfilePhotoPart() throws Exception {
+    // D-197: the profile photo is backend-enforced as absent from
+    // sign-up — an old client still sending the part gets a 201, but
+    // nothing is stored.
     var f = factory.seedMaster();
     MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", PNG);
     MockMultipartFile idCardBack = new MockMultipartFile("idCardBack", "id-back.jpg", "image/jpeg", PNG_BACK);
     MockMultipartFile photo = new MockMultipartFile("profilePhoto", "photo.jpg", "image/jpeg", PNG);
+    String email = "rv-photo-" + System.nanoTime() + "@example.com";
     mvc.perform(multipart("/api/auth/register").file(idCard).file(idCardBack).file(photo)
-        .param("fullName", "Photo User").param("phone", "01712345679").param("email", "rv-photo-" + System.nanoTime() + "@example.com")
+        .param("fullName", "Photo User").param("phone", "01712345679").param("email", email)
         .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
         .param("batch", "44")
         .param("address", "Dhanmondi, Dhaka").param("studentId", "RV-PHOTO-" + System.nanoTime()).param("password", "Password1"))
       .andExpect(status().isCreated());
+    assertNull(users.findByEmail(email).orElseThrow().getProfilePhotoKey(),
+        "no profile photo may be stored at registration any more");
+  }
+  @Test void homeAddressInDifferentCityStillAutoVerifies() throws Exception {
+    // D-196: the student enters a home address (Chattogram) while the
+    // campus is in Sylhet — the address must not gate auto-verification,
+    // and the email OTP is sent after AUTO_VERIFIED as usual. (The test
+    // fake OCR emits no address tokens, so the gate itself is proven by
+    // the matcher tests; this locks the end-to-end journey with a home
+    // address.)
+    String email = "rv-home-" + System.nanoTime() + "@example.com";
+    String token = registerWithAddress("home", email, "House 7, Road 3, Chattogram");
+    String status = waitForOcr(token);
+    assertTrue(status.contains("\"ocrStatus\":\"AUTO_VERIFIED\""),
+        "a home address must not block auto-verification; status was " + status);
+    status = waitForEmailOtpSent(token);
+    assertTrue(status.contains("\"emailOtpSent\":true"), "the email OTP must have been sent; status was " + status);
+    assertNotNull(emailCode(email));
   }
   @Test void unknownTokenIsNotFoundAndResendNeedsAutoVerified() throws Exception {
     mvc.perform(get("/api/auth/registration/status").param("token", "no-such-token"))

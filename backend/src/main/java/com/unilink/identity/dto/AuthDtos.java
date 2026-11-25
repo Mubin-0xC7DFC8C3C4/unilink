@@ -4,8 +4,13 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.LocalDateTime;
 public final class AuthDtos {
   private AuthDtos(){}
-  /** FR-AUTH-01 (full SRS text): full name, phone, email, university, department, batch, address,
-   *  student ID, ID card image AND profile photo. */
+  /** FR-AUTH-01 (full SRS text, as amended 2026-11-25): full name, phone,
+   *  email, university, department, batch, address, student ID, ID card
+   *  image (front + back, D-190). The profile photo was removed from
+   *  sign-up (D-178) and is backend-enforced as absent here (D-197):
+   *  no profilePhoto part exists on this form any more, so old direct
+   *  API clients can no longer attach one at registration — students
+   *  upload it from Settings → Edit Profile after logging in. */
   public static class RegisterForm {
     @NotBlank private String fullName;
     /** Bangladeshi mobile: 11 digits, 01[3-9]xxxxxxxx (FR-AUTH-02; +880 form is not accepted). */
@@ -22,7 +27,7 @@ public final class AuthDtos {
      *  stored verbatim. The old numeric batchId is gone from registration. */
     private String batch;
     @NotBlank private String address; @NotBlank private String studentId;
-    @NotBlank private String password; private MultipartFile idCard; private MultipartFile idCardBack; private MultipartFile profilePhoto;
+    @NotBlank private String password; private MultipartFile idCard; private MultipartFile idCardBack;
     public String getFullName(){return fullName;} public void setFullName(String v){fullName=v;}
     public String getPhone(){return phone;} public void setPhone(String v){phone=v;}
     public String getEmail(){return email;} public void setEmail(String v){email=v;}
@@ -34,7 +39,6 @@ public final class AuthDtos {
     public String getStudentId(){return studentId;} public void setStudentId(String v){studentId=v;}
     public String getPassword(){return password;} public void setPassword(String v){password=v;}
     public MultipartFile getIdCard(){return idCard;} public void setIdCard(MultipartFile v){idCard=v;} public MultipartFile getIdCardBack(){return idCardBack;} public void setIdCardBack(MultipartFile v){idCardBack=v;}
-    public MultipartFile getProfilePhoto(){return profilePhoto;} public void setProfilePhoto(MultipartFile v){profilePhoto=v;}
   }
   public record LoginRequest(@NotBlank @Email String email, @NotBlank String password) {}
   public record OtpVerifyRequest(@NotNull Long userId, @NotBlank String otp) {}

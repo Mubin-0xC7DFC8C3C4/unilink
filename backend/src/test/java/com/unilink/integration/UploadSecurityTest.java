@@ -9,6 +9,7 @@ import com.unilink.identity.service.AuthService;
 import com.unilink.messaging.MessagingService;
 import com.unilink.profile.ProfileService;
 import com.unilink.security.Principals;
+import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -183,7 +184,9 @@ class UploadSecurityTest {
     assertEquals(photo.length - 8, riffSize, "stored WebP RIFF size must match the stripped file");
   }
 
-  @Test void idCardAndPhotoExifAreStrippedOnRegister() throws Exception {
+  @Test void idCardExifIsStrippedOnRegister() throws Exception {
+    // D-197: no profile photo is accepted at registration any more, so
+    // only the two ID-card sides are checked here now.
     var f = factory.seedMaster();
     RegisterForm form = new RegisterForm();
     form.setFullName("Upload Sec"); form.setPhone("01712345678"); form.setEmail("up-new@example.com");
@@ -191,12 +194,10 @@ class UploadSecurityTest {
     form.setAddress("Test address"); form.setStudentId("UPNEW"); form.setPassword("Student123");
     form.setIdCard(new MockMultipartFile("idCard", "id.jpg", "image/jpeg", jpegWithGpsExif()));
     form.setIdCardBack(new MockMultipartFile("idCardBack", "id-back.png", "image/png", pngWithExif()));
-    form.setProfilePhoto(new MockMultipartFile("profilePhoto", "photo.png", "image/png", pngWithExif()));
     auth.register(form);
     User u = user("up-new@example.com");
     assertFalse(containsText(storedBytes(u.getIdCardKey()), "Exif"), "stored ID card must not contain EXIF");
     assertFalse(contains(storedBytes(u.getIdCardKey()), GPS), "stored ID card must not contain the GPS payload");
-    assertFalse(contains(storedBytes(u.getProfilePhotoKey()), GPS), "stored sign-up photo must not contain GPS");
   }
 
   @Test void resubmittedIdCardExifIsStripped() throws Exception {
@@ -210,6 +211,36 @@ class UploadSecurityTest {
     byte[] stored = storedBytes(user("up-rej@example.com").getIdCardKey());
     assertFalse(containsText(stored, "Exif"), "resubmitted ID card must not contain EXIF");
     assertFalse(contains(stored, GPS), "resubmitted ID card must not contain the GPS payload");
+  }
+
+  @Test void resubmitSingleSideIdenticalToStoredOppositeIsRejected() throws Exception {
+    // D-197: re-uploading one side identical to the stored opposite side
+    // is the same image twice — the both-new check never sees it, so the
+    // single-side check must catch it in both directions.
+    var f = factory.seedMaster();
+    byte[] front = plainPng();
+    byte[] back = new byte[]{(byte)0x89,'P','N','G',13,10,26,10,9,8,7,6};
+    User u = new User();
+    u.setFullName("Rejected Two"); u.setEmail("up-rej2@example.com"); u.setPhone("01712345680");
+    u.setAddress("Test address"); u.setStudentId("UPREJ2"); u.setUniversityId(f.mu().getId());
+    u.setDepartmentId(f.muCse().getId()); u.setBatchId(f.muBatch().getId()); u.setState("REJECTED");
+    u.setIdCardKey(storage.store("id-cards", "front.png", "image/png", ExifStripper.strip(front)));
+    u.setIdCardBackKey(storage.store("id-cards", "back.png", "image/png", ExifStripper.strip(back)));
+    u = users.save(u);
+    Long userId = u.getId();
+    // Front-only re-upload of the stored back bytes.
+    var e = assertThrows(Exceptions.BadRequest.class, () -> auth.resubmit(userId,
+        new MockMultipartFile("idCard", "id.jpg", "image/jpeg", back), null));
+    assertEquals("ID_CARD_SAME_IMAGE", e.code());
+    // Back-only re-upload of the stored front bytes.
+    var e2 = assertThrows(Exceptions.BadRequest.class, () -> auth.resubmit(userId,
+        null, new MockMultipartFile("idCardBack", "id-back.jpg", "image/jpeg", front)));
+    assertEquals("ID_CARD_SAME_IMAGE", e2.code());
+    // A genuinely different front re-upload succeeds.
+    byte[] other = new byte[]{(byte)0x89,'P','N','G',13,10,26,10,5,5,5,5};
+    assertDoesNotThrow(() -> auth.resubmit(userId,
+        new MockMultipartFile("idCard", "id.jpg", "image/jpeg", other), null));
+    assertEquals("PENDING_REVIEW", users.findById(userId).orElseThrow().getState());
   }
 
   @Test void postAttachmentCountIsCappedAtFive() {

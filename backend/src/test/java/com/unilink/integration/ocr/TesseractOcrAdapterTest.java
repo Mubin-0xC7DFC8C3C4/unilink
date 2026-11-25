@@ -1,5 +1,6 @@
 package com.unilink.integration.ocr;
 
+import com.unilink.identity.service.CardPlausibilityChecker;
 import com.unilink.identity.service.IdCardMatcher;
 import org.junit.jupiter.api.Test;
 import java.awt.*;
@@ -65,5 +66,36 @@ class TesseractOcrAdapterTest {
     OcrProvider.Result r = adapter.extract(cardImage(), "id.png", "Tanvir Mahmud", "232-115-310", "Metropolitan University");
     assertEquals("DONE", r.status(), "a missing language pack must fall back to eng, not fail the card");
     assertTrue(r.text().contains("Mahmud"));
+  }
+  /** A solid-colour image rendered in-test (synthetic — no real data). */
+  static byte[] solidImage(Color colour) throws Exception {
+    BufferedImage img = new BufferedImage(800, 500, BufferedImage.TYPE_INT_RGB);
+    Graphics2D g = img.createGraphics();
+    g.setColor(colour); g.fillRect(0, 0, 800, 500);
+    g.dispose();
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    assertTrue(ImageIO.write(img, "png", out));
+    return out.toByteArray();
+  }
+  @Test void qualitySignalsFlagSolidImagesAsBlank() throws Exception {
+    var white = TesseractOcrAdapter.computeQualitySignals(solidImage(Color.WHITE));
+    assertTrue(white.decodable());
+    assertEquals(0.0, white.pixelStdDev(), 0.001);
+    assertEquals(1.0, white.nearUniformShare(), 0.001);
+    assertTrue(new CardPlausibilityChecker().isBlankImage(white, ""),
+        "a solid-white upload must read as blank");
+    var blue = TesseractOcrAdapter.computeQualitySignals(solidImage(new Color(30, 90, 200)));
+    assertTrue(new CardPlausibilityChecker().isBlankImage(blue, ""),
+        "a solid-colour upload must read as blank");
+    var card = TesseractOcrAdapter.computeQualitySignals(cardImage());
+    assertTrue(card.decodable());
+    assertTrue(card.pixelStdDev() > 8.0,
+        "a genuine card image has contrast; stdDev was " + card.pixelStdDev());
+    assertFalse(new CardPlausibilityChecker().isBlankImage(card, "METROPOLITAN UNIVERSITY"),
+        "a genuine card image must never read as blank");
+    var garbage = TesseractOcrAdapter.computeQualitySignals(new byte[]{1, 2, 3, 4, 5});
+    assertFalse(garbage.decodable(), "random bytes are not a decodable image");
+    assertFalse(new CardPlausibilityChecker().isBlankImage(garbage, "METROPOLITAN UNIVERSITY"),
+        "undecodable bytes that still yielded text are not blank (WebP rule)");
   }
 }
