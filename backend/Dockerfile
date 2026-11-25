@@ -13,6 +13,12 @@ RUN ./mvnw -q -B package -DskipTests
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
+# D-172 (2026-11-25): OCR needs the `tesseract` binary at runtime —
+# OcrJobService shells out to it for ID verification. Without it every
+# verification fails with "Cannot run program tesseract: No such file or
+# directory" (observed in the production log 2026-11-25; ocrStatus FAILED
+# for every application). Installed here, as root, before USER unilink.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -m unilink && mkdir -p /data/unilink/storage && chown -R unilink:unilink /data
 COPY --from=build /src/target/unilink-backend-*.jar /app/app.jar
 USER unilink

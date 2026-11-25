@@ -45,9 +45,15 @@ spring:
           # so an unreachable/blackholed SMTP route otherwise blocks the
           # request thread (and the user's signup) for minutes. Observed in
           # production 2026-11-23: register/password-reset hung 52–178 s.
-          connectionTimeout: 10000
+          # D-171 (2026-11-25): JavaMail property names are LOWERCASE.
+          # The previous camelCase spellings (connectionTimeout,
+          # writeTimeout) were silently ignored — the production log showed
+          # "timeout -1" and a registration hung 120 s+ against
+          # smtp.gmail.com:587 on 2026-11-25. These exact lowercase keys
+          # are asserted by MailTimeoutPropertiesTest.
+          connectiontimeout: 10000
           timeout: 10000
-          writeTimeout: 10000
+          writetimeout: 10000
           starttls:
             enable: ${SMTP_STARTTLS:false}
 server:
