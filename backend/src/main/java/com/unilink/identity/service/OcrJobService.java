@@ -9,7 +9,11 @@ import org.springframework.stereotype.Service;
  *  MANUAL_REVIEW) — an engine failure becomes MANUAL_REVIEW, so no
  *  account is ever left stuck in VERIFYING. The email OTP is sent only
  *  after AUTO_VERIFIED, from its own transaction, so a mail outage can
- *  never roll the decision back — the frontend offers a resend instead. */
+ *  never roll the decision back — the frontend offers a resend instead.
+ *  D-191: both sides of the card are OCR'd (front + back + the back's
+ *  rotated validity strip) and the matcher combines them; the back is
+ *  required evidence, so a missing or unreadable back can never
+ *  auto-verify. */
 @Service
 public class OcrJobService {
   private static final Logger log = LoggerFactory.getLogger(OcrJobService.class);
@@ -18,13 +22,24 @@ public class OcrJobService {
   public OcrJobService(OcrProvider ocr, StorageGateway storage, VerificationDecisionService decisions,
       OtpService otp, UserRepository users){
     this.ocr=ocr; this.storage=storage; this.decisions=decisions; this.otp=otp; this.users=users; }
+  /** Legacy single-side entry point: the back is absent, so the matcher
+   *  sees an empty back side and the decision degrades to MANUAL_REVIEW.
+   *  Kept for callers that only have a front image (none in production —
+   *  registration and resubmit both pass two sides). */
   @Async("ocrExecutor")
   @Retryable(retryFor = Exception.class, maxAttempts = 3, backoff = @Backoff(delay = 5000, multiplier = 2))
   public void runOcr(Long requestId, String idCardKey, IdCardMatcher.Subject subject){
+    runOcr(requestId, idCardKey, null, subject, null);
+  }
+  @Async("ocrExecutor")
+  @Retryable(retryFor = Exception.class, maxAttempts = 3, backoff = @Backoff(delay = 5000, multiplier = 2))
+  public void runOcr(Long requestId, String frontKey, String backKey, IdCardMatcher.Subject subject, String batch){
     try {
-      byte[] bytes = storage.open(idCardKey).readAllBytes();
-      OcrProvider.Result r = ocr.extract(bytes, idCardKey, subject.fullName(), subject.studentId(), subject.universityName());
-      VerificationDecisionService.AppliedOutcome outcome = decisions.applyOcrOutcome(requestId, r, subject);
+      byte[] frontBytes = storage.open(frontKey).readAllBytes();
+      byte[] backBytes = backKey == null ? null : storage.open(backKey).readAllBytes();
+      OcrProvider.TwoSidedResult r = ocr.extractTwoSided(frontBytes, backBytes, frontKey, backKey,
+          subject.fullName(), subject.studentId(), subject.universityName());
+      VerificationDecisionService.AppliedOutcome outcome = decisions.applyTwoSidedOcrOutcome(requestId, r, subject, batch);
       if (outcome.sendEmailOtp()){
         users.findById(outcome.userId()).ifPresent(user -> {
           if (!otp.sendEmailOtp(user))

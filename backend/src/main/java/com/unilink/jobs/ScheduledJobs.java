@@ -65,6 +65,16 @@ public class ScheduledJobs {
         users.findById(r.getUserId()).ifPresent(u -> {
           if (key.equals(u.getIdCardKey())){ u.setIdCardKey(null); users.save(u); }
         });
+        // D-190: the back image follows the same retention rule (7 days
+        // approved / 30 days rejected, D-053), on the request row and the
+        // user row, under the same keep window.
+        String backKey = r.getIdCardBackKey();
+        if (backKey != null){
+          storage.delete(backKey); r.setIdCardBackKey(null); requests.save(r);
+          users.findById(r.getUserId()).ifPresent(u -> {
+            if (backKey.equals(u.getIdCardBackKey())){ u.setIdCardBackKey(null); users.save(u); }
+          });
+        }
       }
     }
   }

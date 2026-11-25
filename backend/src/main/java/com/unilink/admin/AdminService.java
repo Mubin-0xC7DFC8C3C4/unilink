@@ -381,13 +381,18 @@ public class AdminService {
       .map(AnnouncementDto::from).toList();
   }
   // ---- master data (FR-ADM-10): deactivate, never hard-delete referenced rows ----
-  @Transactional public UniversityDto createUniversity(Principals.AdminPrincipal admin, String name, String shortName, String domains, String ip){
+  /** D-192: category is "PUBLIC" or "PRIVATE" (validated); null keeps it
+   *  unclassified. The admin API is how future universities are added
+   *  without a frontend change. */
+  @Transactional public UniversityDto createUniversity(Principals.AdminPrincipal admin, String name, String shortName, String domains, String category, String ip){
     policy.requirePlatformAdmin(admin);
+    if (category != null && !"PUBLIC".equals(category) && !"PRIVATE".equals(category))
+      throw new Exceptions.BadRequest("INVALID_CATEGORY","University category must be PUBLIC or PRIVATE");
     // D-149: universities.name has a unique key (V001 uk_universities_name)
     // and there is no DataIntegrityViolation handler, so a duplicate used
     // to surface as a 500 INTERNAL_ERROR instead of a 409.
     if (universities.findByName(name).isPresent()) throw new Exceptions.Conflict("UNIVERSITY_EXISTS","A university with this name already exists");
-    University u = new University(); u.setName(name); u.setShortName(shortName); u.setEmailDomains(domains); u.setActive(true);
+    University u = new University(); u.setName(name); u.setShortName(shortName); u.setEmailDomains(domains); u.setCategory(category); u.setActive(true);
     u = universities.save(u); audit.write(admin.adminId(),"MASTERDATA_CREATE","UNIVERSITY",u.getId(),null,Map.of(),ip); return UniversityDto.from(u);
   }
   @Transactional public DepartmentDto createDepartment(Principals.AdminPrincipal admin, Long universityId, Long catalogId, String name, String ip){

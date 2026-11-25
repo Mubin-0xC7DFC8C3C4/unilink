@@ -36,6 +36,32 @@ public class VerificationDecisionService {
     req.setOcrText(result.text());
     req.setOcrMatchScore(decision.compositeScore());
     req.setOcrStatus(decision.outcome().name());
+    return applyDecision(req, decision);
+  }
+  /** D-191: the two-sided path. The front and back OCR texts are both
+   *  stored on the request (the admin queue exposes both), and the
+   *  matcher combines them with the batch and validity evidence. The
+   *  state machine is unchanged: AUTO_VERIFIED leaves the request alone
+   *  until the email OTP completes, MANUAL_REVIEW moves it to
+   *  PENDING_REVIEW, VERIFICATION_FAILED rejects it. */
+  @Transactional
+  public AppliedOutcome applyTwoSidedOcrOutcome(Long requestId, OcrProvider.TwoSidedResult result,
+                                                IdCardMatcher.Subject subject, String batch){
+    VerificationRequest req = requests.findById(requestId).orElseThrow(() -> new IllegalArgumentException("Unknown verification request " + requestId));
+    IdCardMatcher.Decision decision = matcher.matchTwoSided(
+        result.front().text(), result.front().confidence(),
+        result.back().text(), result.back().confidence(),
+        result.validity(), batch, subject);
+    req.setOcrText(result.front().text());
+    req.setOcrTextBack(result.back().text());
+    req.setOcrMatchScore(decision.compositeScore());
+    req.setOcrStatus(decision.outcome().name());
+    return applyDecision(req, decision);
+  }
+  /** One call, one transaction: request row, account state and the audit
+   *  attempt row move together (shared by the single-side and two-sided
+   *  paths). */
+  private AppliedOutcome applyDecision(VerificationRequest req, IdCardMatcher.Decision decision){
     User u = users.findById(req.getUserId()).orElseThrow(() -> new IllegalArgumentException("Unknown user " + req.getUserId()));
     VerificationAttempt att = new VerificationAttempt();
     att.setUserId(u.getId()); att.setVerificationRequestId(req.getId());

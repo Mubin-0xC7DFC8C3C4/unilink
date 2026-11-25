@@ -255,7 +255,7 @@ class RepositoryServiceAuditTest {
     var f = factory.seedMaster();
     var platform = platformAdmin("s9");
     assertCode(Exceptions.Conflict.class, "UNIVERSITY_EXISTS",
-      () -> admin.createUniversity(platform, "Metropolitan University", "MU", "", "127.0.0.1"));
+      () -> admin.createUniversity(platform, "Metropolitan University", "MU", "", null, "127.0.0.1"));
     admin.createSector(platform, "W2 Sector", "127.0.0.1");
     assertCode(Exceptions.Conflict.class, "SECTOR_EXISTS",
       () -> admin.createSector(platform, "W2 Sector", "127.0.0.1"));
@@ -365,9 +365,10 @@ class RepositoryServiceAuditTest {
     com.unilink.identity.dto.AuthDtos.RegisterForm form = new com.unilink.identity.dto.AuthDtos.RegisterForm();
     form.setFullName("Delete Repro"); form.setPhone("01799999999");
     form.setEmail("del-repro@example.com"); form.setUniversityId(f.mu().getId());
-    form.setDepartmentId(f.muCse().getId()); form.setBatchId(f.muBatch().getId());
+    form.setDepartmentId(f.muCse().getId()); form.setBatch("44");
     form.setAddress("Dhaka"); form.setStudentId("DELREPRO1"); form.setPassword("Student123");
     form.setIdCard(new org.springframework.mock.web.MockMultipartFile("idCard", "id.png", "image/png", PNG));
+    form.setIdCardBack(new org.springframework.mock.web.MockMultipartFile("idCardBack", "id-back.png", "image/png", new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 9, 8, 7, 6}));
     form.setProfilePhoto(new org.springframework.mock.web.MockMultipartFile("profilePhoto", "photo.png", "image/png", PNG));
     var dto = auth.register(form);
     Long id = dto.id();

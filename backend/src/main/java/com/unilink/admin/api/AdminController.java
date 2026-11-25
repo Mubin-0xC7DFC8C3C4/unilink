@@ -28,7 +28,7 @@ public class AdminController {
   public record DecideBody(String action, String reason) {}
   public record ContentDecideBody(String targetType, Long targetId, String action, String reason) {}
   public record AnnouncementBody(String title, String body, String scope, Long universityId, java.time.LocalDateTime expiresAt) {}
-  public record MasterBody(String name, String shortName, String emailDomains, Long universityId, Long catalogId) {}
+  public record MasterBody(String name, String shortName, String emailDomains, Long universityId, Long catalogId, String category) {}
   public record ModeratorBody(String email, Long universityId, String password) {}
   @GetMapping("/dashboard") public Map<String,Object> dashboard(Authentication a){ return admin.dashboard(admin(a)); }
   @GetMapping("/verification-queue") public List<VerificationRequestDto> queue(Authentication a, @RequestParam(required=false) String status){ return admin.verificationQueue(admin(a), status); }
@@ -154,7 +154,7 @@ public class AdminController {
     return admin.moderateEvent(admin(a), id, b.status(), b.deadline(), b.visibility(), b.registrationClosed(), ip(req));
   }
   @PostMapping("/master-data/universities") public UniversityDto createUniversity(Authentication a, @RequestBody MasterBody b, HttpServletRequest req){
-    return admin.createUniversity(admin(a), b.name(), b.shortName(), b.emailDomains(), ip(req));
+    return admin.createUniversity(admin(a), b.name(), b.shortName(), b.emailDomains(), b.category(), ip(req));
   }
   public record MasterUpdate(String name, String shortName, String emailDomains, String label, Integer startYear, Boolean active) {}
   @PutMapping("/master-data/universities/{id}") public UniversityDto updateUniversity(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){

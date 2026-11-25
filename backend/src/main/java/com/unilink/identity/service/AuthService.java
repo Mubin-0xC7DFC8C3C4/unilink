@@ -52,16 +52,53 @@ public class AuthService {
   private static byte[] bytes(MultipartFile f){
     try { return f==null?new byte[0]:f.getBytes(); } catch (IOException e){ throw new Exceptions.BadRequest("INVALID_FILE","Cannot read uploaded file"); }
   }
+  /** D-194: free-text batch/session. 1–32 characters, letters/digits/
+   *  space/hyphen/slash/dot/parentheses, starting with a letter or digit.
+   *  Stored verbatim — never normalised, truncated or converted. A blank
+   *  value is allowed (batch is optional); the frontend and backend share
+   *  this exact rule. */
+  public static final java.util.regex.Pattern BATCH_PATTERN =
+      java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9 \\-/.()]{0,31}$");
+  static String validateBatch(String batch){
+    if (batch == null) return null;
+    String v = batch.trim();
+    if (v.isEmpty()) return null;
+    if (!BATCH_PATTERN.matcher(v).matches())
+      throw new Exceptions.BadRequest("INVALID_BATCH","Batch/session must be 1–32 characters: letters, digits, spaces, hyphens, slashes, dots or parentheses");
+    return v;
+  }
+  /** D-193: free-text department label. 1–255 characters; the same
+   *  character class as the batch, plus commas and ampersands for names
+   *  like "Computer Science & Engineering". */
+  static String validateDepartmentLabel(String label){
+    if (label == null) return null;
+    String v = label.trim();
+    if (v.isEmpty()) return null;
+    if (v.length() > 255 || !v.matches("^[A-Za-z0-9][A-Za-z0-9 \\-/.(),&]{0,254}$"))
+      throw new Exceptions.BadRequest("INVALID_DEPARTMENT","Department must be 1–255 characters: letters, digits, spaces and - / . ( ) , &");
+    return v;
+  }
   @Transactional
   public UserDto register(RegisterForm form){
     checkPasswordRule(form.getPassword());
     var uni = universities.findById(form.getUniversityId()).orElseThrow(() -> new Exceptions.NotFound("University"));
     if (!Boolean.TRUE.equals(uni.getActive())) throw new Exceptions.BadRequest("UNIVERSITY_INACTIVE","University is not active");
-    var dept = departments.findById(form.getDepartmentId()).orElseThrow(() -> new Exceptions.NotFound("Department"));
-    if (!dept.getUniversityId().equals(uni.getId())) throw new Exceptions.BadRequest("DEPARTMENT_MISMATCH","Department does not belong to the university");
-    Long batchId = form.getBatchId();
-    if (batchId!=null){ var b = batches.findById(batchId).orElseThrow(() -> new Exceptions.NotFound("Batch"));
-      if (!b.getUniversityId().equals(uni.getId())) throw new Exceptions.BadRequest("BATCH_MISMATCH","Batch does not belong to the university"); }
+    // D-193: department is a verified catalog row OR a free-text label —
+    // exactly one. A catalog id must belong to the university; a label is
+    // stored verbatim and the account goes to manual review for the
+    // department (the matcher can only check it when it matches a known
+    // department name). No department is ever invented for a university.
+    Department dept = null; String departmentLabel = null;
+    if (form.getDepartmentId() != null){
+      dept = departments.findById(form.getDepartmentId()).orElseThrow(() -> new Exceptions.NotFound("Department"));
+      if (!dept.getUniversityId().equals(uni.getId())) throw new Exceptions.BadRequest("DEPARTMENT_MISMATCH","Department does not belong to the university");
+    } else {
+      departmentLabel = validateDepartmentLabel(form.getDepartmentLabel());
+      if (departmentLabel == null) throw new Exceptions.BadRequest("DEPARTMENT_REQUIRED","Department is required — choose one or type your department");
+    }
+    // D-194: free-text batch, validated and stored verbatim; the numeric
+    // batchId is no longer part of registration (legacy rows keep theirs).
+    String batchLabel = validateBatch(form.getBatch());
     if (users.existsByEmail(form.getEmail())) throw new Exceptions.Conflict("EMAIL_TAKEN","An account with this email already exists");
     if (users.existsByUniversityIdAndStudentId(uni.getId(), form.getStudentId()))
       throw new Exceptions.Conflict("STUDENT_ID_TAKEN","This student ID is already registered at this university");
@@ -72,21 +109,24 @@ public class AuthService {
       .anyMatch(other -> "SUSPENDED".equals(other.getState()) || "BANNED".equals(other.getState()));
     if (phoneBlocked) throw new Exceptions.Forbidden("This phone number is attached to a suspended or banned account");
     if (form.getIdCard()==null || form.getIdCard().isEmpty()) throw new Exceptions.BadRequest("ID_CARD_REQUIRED","Student ID card image is required (FR-AUTH-01)");
+    if (form.getIdCardBack()==null || form.getIdCardBack().isEmpty()) throw new Exceptions.BadRequest("ID_CARD_BACK_REQUIRED","The back of the student ID card is required (FR-AUTH-01)");
     byte[] idBytes = bytes(form.getIdCard());
+    byte[] backBytes = bytes(form.getIdCardBack());
+    // D-190: the same image submitted as both sides is rejected, not
+    // silently accepted — byte-identical uploads (SHA-256 of the raw
+    // bytes) cannot be a front and a back at once. Different bytes that
+    // OCR as the same side are caught by the matcher (D-191).
+    if (java.util.Arrays.equals(Hashing.sha256Bytes(idBytes), Hashing.sha256Bytes(backBytes)))
+      throw new Exceptions.BadRequest("ID_CARD_SAME_IMAGE","The front and back images are identical. Please upload the front and the back of your ID card.");
     // D-106: validate the ORIGINAL bytes (size is enforced pre-strip), then
     // strip EXIF; the stored bytes are the stripped ones. The sniffed type is
     // stored, not a hardcoded "image/jpeg" — a PNG/WebP upload is a PNG/WebP.
     String idType = uploads.validateImage(idBytes, UploadValidator.ID_CARD_MAX, form.getIdCard().getContentType());
     String idKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCard().getOriginalFilename()), idType, ExifStripper.strip(idBytes));
-    // ID card back (2026-11-22): optional second image, validated and
-    // stored privately exactly like the front; older clients that send
-    // only the front keep working.
-    String idBackKey = null;
-    if (form.getIdCardBack()!=null && !form.getIdCardBack().isEmpty()){
-      byte[] backBytes = bytes(form.getIdCardBack());
-      String backType = uploads.validateImage(backBytes, UploadValidator.ID_CARD_MAX, form.getIdCardBack().getContentType());
-      idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCardBack().getOriginalFilename()), backType, ExifStripper.strip(backBytes));
-    }
+    // D-190: the back is required and stored privately exactly like the
+    // front, in the same id-cards namespace, under its own key.
+    String backType = uploads.validateImage(backBytes, UploadValidator.ID_CARD_MAX, form.getIdCardBack().getContentType());
+    String idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCardBack().getOriginalFilename()), backType, ExifStripper.strip(backBytes));
     // D-178: the profile photo is no longer collected at registration —
     // students upload it from Settings → Edit Profile after logging in.
     // The part is still accepted (old clients, and the Settings flow
@@ -98,7 +138,8 @@ public class AuthService {
       photoKey = storage.store("profile-photos", UploadValidator.sanitizeFileName(form.getProfilePhoto().getOriginalFilename()), photoType, ExifStripper.strip(photoBytes));
     }
     User u = new User();
-    u.setUniversityId(uni.getId()); u.setDepartmentId(dept.getId()); u.setBatchId(batchId);
+    u.setUniversityId(uni.getId()); u.setDepartmentId(dept == null ? null : dept.getId()); u.setDepartmentLabel(departmentLabel);
+    u.setBatchId(null); u.setBatchLabel(batchLabel);
     u.setFullName(form.getFullName()); u.setEmail(form.getEmail()); u.setPhone(form.getPhone());
     u.setAddress(form.getAddress()); u.setStudentId(form.getStudentId());
     u.setState(AccountState.REGISTERED.name()); u.setIdCardKey(idKey); u.setIdCardBackKey(idBackKey); u.setProfilePhotoKey(photoKey);
@@ -107,7 +148,7 @@ public class AuthService {
     Profile p = new Profile(); p.setId(u.getId()); p.setPhoneVisible(false); profiles.save(p);
     VerificationRequest req = new VerificationRequest();
     req.setUserId(u.getId()); req.setStatus("AWAITING_VERIFICATION"); req.setOcrStatus("PENDING");
-    req.setIdCardKey(idKey); req.setProfilePhotoKey(photoKey);
+    req.setIdCardKey(idKey); req.setIdCardBackKey(idBackKey); req.setProfilePhotoKey(photoKey);
     // D-175: the registration token scopes the status / email-OTP
     // endpoints. Only the hash is stored; the plaintext is returned once
     // in the register response. It expires after 24 hours.
@@ -118,13 +159,16 @@ public class AuthService {
     // D-173: the journey is OCR → email OTP code → active. No phone OTP
     // and no email link are sent at registration any more; the email OTP
     // is sent by the OCR job only when it reaches AUTO_VERIFIED.
-    ocrJob.runOcr(req.getId(), idKey, ocrSubject(u, uni.getName(), dept));
+    // D-191: the job OCRs both sides and cross-validates them.
+    ocrJob.runOcr(req.getId(), idKey, idBackKey, ocrSubject(u, uni.getName(), dept, departmentLabel), batchLabel);
     return toDto(u, false, null, verificationToken);
   }
-  /** The registration data the OCR matcher compares against the card. */
-  private IdCardMatcher.Subject ocrSubject(User u, String universityName, Department dept){
-    String deptName = dept.getName();
-    String deptShort = catalogs.findById(dept.getCatalogId()).map(DepartmentCatalog::getShortName).orElse(null);
+  /** The registration data the OCR matcher compares against the card.
+   *  With a free-text department (D-193) the catalog short name is
+   *  unknown, so the matcher checks the label as the department name. */
+  private IdCardMatcher.Subject ocrSubject(User u, String universityName, Department dept, String departmentLabel){
+    String deptName = dept != null ? dept.getName() : departmentLabel;
+    String deptShort = dept == null ? null : catalogs.findById(dept.getCatalogId()).map(DepartmentCatalog::getShortName).orElse(null);
     return new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), universityName, deptName, deptShort, u.getAddress());
   }
   public static UserDto toDto(User u){
@@ -146,7 +190,7 @@ public class AuthService {
    *  response (D-175): the plaintext registration token, returned once. */
   public static UserDto toDto(User u, boolean mustChangePassword, Boolean emailSent, String verificationToken){
     return new UserDto(u.getId(), u.getFullName(), u.getEmail(), u.getPhone(), u.getUniversityId(), u.getDepartmentId(),
-      u.getBatchId(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt(), mustChangePassword, emailSent, verificationToken);
+      u.getDepartmentLabel(), u.getBatchId(), u.getBatchLabel(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt(), mustChangePassword, emailSent, verificationToken);
   }
   /** D-094: whether the stored credential carries the must-change flag. */
   public boolean mustChangePassword(Long userId){
@@ -344,7 +388,7 @@ public class AuthService {
     sessions.invalidateAllSessions(u.getEmail());
   }
   @Transactional
-  public UserDto resubmit(Long userId, MultipartFile idCard){
+  public UserDto resubmit(Long userId, MultipartFile idCard, MultipartFile idCardBack){
     User u = getUserOr404(userId);
     if (!"REJECTED".equals(u.getState())) throw new Exceptions.BadRequest("NOT_REJECTED","Only rejected accounts can resubmit");
     LocalDateTime since = LocalDateTime.now().minusHours(24);
@@ -353,20 +397,35 @@ public class AuthService {
     long recent = attempts.countByUserIdAndOutcomeAndCreatedAtAfter(userId, "RESUBMIT", since);
     if (recent >= 3) throw new Exceptions.TooManyRequests("Resubmission limit reached (3 per 24 hours). Try again later.");
     String idKey = u.getIdCardKey();
+    String idBackKey = u.getIdCardBackKey();
+    byte[] newFrontBytes = null; byte[] newBackBytes = null;
     if (idCard!=null && !idCard.isEmpty()){
-      byte[] b = bytes(idCard);
-      String type = uploads.validateImage(b, UploadValidator.ID_CARD_MAX, idCard.getContentType());
+      newFrontBytes = bytes(idCard);
+      String type = uploads.validateImage(newFrontBytes, UploadValidator.ID_CARD_MAX, idCard.getContentType());
       // D-106: strip EXIF before storing. The previous key is NOT deleted here:
       // the rejected attempt's VerificationRequest row still references it, and
       // D-053 keeps rejected ID images for 30 days to support appeal; the
       // purgeIdImages job deletes it when retention expires.
-      idKey = storage.store("id-cards", UploadValidator.sanitizeFileName(idCard.getOriginalFilename()), type, ExifStripper.strip(b));
+      idKey = storage.store("id-cards", UploadValidator.sanitizeFileName(idCard.getOriginalFilename()), type, ExifStripper.strip(newFrontBytes));
       u.setIdCardKey(idKey);
     }
+    // D-190: the back behaves exactly like the front — a side that is not
+    // re-uploaded is carried over from the stored key. A resubmission with
+    // neither side is still a resubmission of the stored images.
+    if (idCardBack!=null && !idCardBack.isEmpty()){
+      newBackBytes = bytes(idCardBack);
+      String type = uploads.validateImage(newBackBytes, UploadValidator.ID_CARD_MAX, idCardBack.getContentType());
+      idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(idCardBack.getOriginalFilename()), type, ExifStripper.strip(newBackBytes));
+      u.setIdCardBackKey(idBackKey);
+    }
+    if (newFrontBytes != null && newBackBytes != null
+        && java.util.Arrays.equals(Hashing.sha256Bytes(newFrontBytes), Hashing.sha256Bytes(newBackBytes)))
+      throw new Exceptions.BadRequest("ID_CARD_SAME_IMAGE","The front and back images are identical. Please upload the front and the back of your ID card.");
     u.setState(AccountState.REJECTED.transitionTo(AccountState.PENDING_REVIEW).name());
     users.save(u);
     VerificationRequest req = new VerificationRequest();
     req.setUserId(userId); req.setStatus("PENDING_REVIEW"); req.setOcrStatus("PENDING"); req.setIdCardKey(idKey);
+    req.setIdCardBackKey(idBackKey);
     req.setProfilePhotoKey(u.getProfilePhotoKey());
     // D-175: a fresh registration token for the new attempt, so the
     // student re-enters the verification flow (Step A) for this resubmission.
@@ -377,10 +436,10 @@ public class AuthService {
     VerificationAttempt att = new VerificationAttempt();
     att.setUserId(userId); att.setVerificationRequestId(req.getId()); att.setOutcome("RESUBMIT"); attempts.save(att);
     String uniName = universities.findById(u.getUniversityId()).map(University::getName).orElse(null);
-    var dept = departments.findById(u.getDepartmentId()).orElse(null);
-    ocrJob.runOcr(req.getId(), idKey, dept == null
-      ? new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), uniName, null, null, u.getAddress())
-      : ocrSubject(u, uniName, dept));
+    var dept = u.getDepartmentId() == null ? null : departments.findById(u.getDepartmentId()).orElse(null);
+    ocrJob.runOcr(req.getId(), idKey, idBackKey, dept == null
+      ? new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), uniName, u.getDepartmentLabel(), null, u.getAddress())
+      : ocrSubject(u, uniName, dept, u.getDepartmentLabel()), u.getBatchLabel());
     return toDto(u, false, null, verificationToken);
   }
   /** Resolves a registration by its token (D-175). Unknown, malformed and

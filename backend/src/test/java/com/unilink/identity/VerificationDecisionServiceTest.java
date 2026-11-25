@@ -124,4 +124,73 @@ class VerificationDecisionServiceTest {
     assertEquals(IdCardMatcher.REASON_UNCLEAR, saved.getReason());
     assertEquals("PENDING_REVIEW", users.findById(u.getId()).orElseThrow().getState());
   }
+
+  // ---- D-191: the two-sided path stores both OCR texts and combines them ----
+  private static String front2(){
+    return """
+        METROPOLITAN UNIVERSITY
+        STUDENT IDENTITY CARD
+        Name: Tanvir Mahmud
+        ID: 232-115-310
+        Programme: B.Sc.(Hons) in CSE - 59th Batch
+        """;
+  }
+  private static final String BACK2 = """
+      METROPOLITAN UNIVERSITY
+      If found kindly return to:
+      Bateshwar, Sylhet-3104
+      Hotline +88 01313-050044
+      Email info@metrouni.edu.bd
+      Web www.metrouni.edu.bd
+      """;
+  private IdCardMatcher.Subject subject2(User u){
+    return new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), "Metropolitan University",
+        "Computer Science and Engineering", "CSE", "Bateshwar, Sylhet-3104");
+  }
+  private static OcrProvider.TwoSidedResult twoSided(String front, String back){
+    return new OcrProvider.TwoSidedResult(
+        new OcrProvider.SideResult(front, 92.0, "DONE"),
+        new OcrProvider.SideResult(back, 90.0, "DONE"), null);
+  }
+  @Test void twoSidedAutoVerifiedStoresBothTexts(){
+    User u = registered("2auto", "232-115-310");
+    VerificationRequest r = requestFor(u);
+    var out = decisions.applyTwoSidedOcrOutcome(r.getId(), twoSided(front2(), BACK2), subject2(u), "59");
+    assertEquals(IdCardMatcher.Outcome.AUTO_VERIFIED, out.outcome());
+    assertTrue(out.sendEmailOtp());
+    var saved = requests.findById(r.getId()).orElseThrow();
+    assertEquals("AUTO_VERIFIED", saved.getOcrStatus());
+    assertEquals(front2(), saved.getOcrText());
+    assertEquals(BACK2, saved.getOcrTextBack(), "the back OCR text is admin evidence on the same request");
+    assertEquals("REGISTERED", users.findById(u.getId()).orElseThrow().getState(),
+        "activation still waits for the email OTP");
+  }
+  @Test void twoSidedBackUnreadableGoesToManualReview(){
+    User u = registered("2back", "232-115-310");
+    VerificationRequest r = requestFor(u);
+    var out = decisions.applyTwoSidedOcrOutcome(r.getId(), twoSided(front2(), ""), subject2(u), "59");
+    assertEquals(IdCardMatcher.Outcome.MANUAL_REVIEW, out.outcome());
+    assertFalse(out.sendEmailOtp());
+    var saved = requests.findById(r.getId()).orElseThrow();
+    assertEquals("MANUAL_REVIEW", saved.getOcrStatus());
+    assertEquals("PENDING_REVIEW", saved.getStatus());
+    assertEquals(IdCardMatcher.REASON_BACK_UNREADABLE, saved.getReason());
+    assertEquals("PENDING_REVIEW", users.findById(u.getId()).orElseThrow().getState());
+  }
+  @Test void twoSidedSameSideGoesToManualReview(){
+    User u = registered("2same", "232-115-310");
+    VerificationRequest r = requestFor(u);
+    var out = decisions.applyTwoSidedOcrOutcome(r.getId(), twoSided(front2(), front2()), subject2(u), "59");
+    assertEquals(IdCardMatcher.Outcome.MANUAL_REVIEW, out.outcome());
+    var saved = requests.findById(r.getId()).orElseThrow();
+    assertEquals(IdCardMatcher.REASON_SAME_SIDE, saved.getReason());
+  }
+  @Test void twoSidedBatchConflictGoesToManualReview(){
+    User u = registered("2batch", "232-115-310");
+    VerificationRequest r = requestFor(u);
+    var out = decisions.applyTwoSidedOcrOutcome(r.getId(), twoSided(front2(), BACK2), subject2(u), "44");
+    assertEquals(IdCardMatcher.Outcome.MANUAL_REVIEW, out.outcome());
+    var saved = requests.findById(r.getId()).orElseThrow();
+    assertEquals(IdCardMatcher.REASON_BATCH, saved.getReason());
+  }
 }

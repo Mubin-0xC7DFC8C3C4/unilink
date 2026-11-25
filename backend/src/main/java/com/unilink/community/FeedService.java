@@ -92,9 +92,12 @@ public class FeedService {
     boolean savedByViewer = viewerId!=null && bookmarks.existsByUserIdAndTargetTypeAndTargetId(viewerId, "POST", post.getId());
     String authorDepartment = null, authorUniversity = null, authorBatch = null;
     if (author != null){
-      if (author.getDepartmentId()!=null) authorDepartment = departments.findById(author.getDepartmentId()).map(Department::getName).orElse(null);
+      // D-193/D-194: the free-text label wins; the legacy row is the fallback.
+      if (author.getDepartmentLabel()!=null) authorDepartment = author.getDepartmentLabel();
+      else if (author.getDepartmentId()!=null) authorDepartment = departments.findById(author.getDepartmentId()).map(Department::getName).orElse(null);
       if (author.getUniversityId()!=null) authorUniversity = universities.findById(author.getUniversityId()).map(University::getName).orElse(null);
-      if (author.getBatchId()!=null) authorBatch = batches.findById(author.getBatchId()).map(Batch::getLabel).orElse(null);
+      if (author.getBatchLabel()!=null) authorBatch = author.getBatchLabel();
+      else if (author.getBatchId()!=null) authorBatch = batches.findById(author.getBatchId()).map(Batch::getLabel).orElse(null);
     }
     return new PostDto(post.getId(), post.getAuthorId(), name, post.getType(), post.getVisibility(),
       post.getTitle(), post.getBody(), post.getStatus(), post.getCreatedAt(),

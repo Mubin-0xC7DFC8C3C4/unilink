@@ -8,7 +8,15 @@ public class User {
   @Version private Long version;
   @Column(name="university_id") private Long universityId;
   @Column(name="department_id") private Long departmentId;
+  /** D-193: free-text department for universities with no verified
+   *  department rows (or a student whose department is not listed).
+   *  Mutually exclusive with departmentId: exactly one is set. */
+  @Column(name="department_label") private String departmentLabel;
   @Column(name="batch_id") private Long batchId;
+  /** D-194: free-text batch/session, stored verbatim ("44", "2022-23",
+   *  "Fall 2024"). New registrations set this and leave batchId null;
+   *  legacy rows keep batchId and resolve the label through the table. */
+  @Column(name="batch_label") private String batchLabel;
   @Column(name="full_name", nullable=false) private String fullName;
   @Column(name="email", nullable=false) private String email;
   @Column(name="phone") private String phone;

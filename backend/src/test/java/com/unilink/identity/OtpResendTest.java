@@ -83,10 +83,13 @@ class OtpResendTest {
     String email = "otp-reg-" + System.nanoTime() + "@example.com";
     // Real PNG magic bytes: UploadValidator sniffs content, junk bytes are rejected.
     byte[] png = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 1, 2, 3, 4};
+    byte[] pngBack = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 9, 8, 7, 6};
     MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", png);
-    String body = mvc.perform(multipart("/api/auth/register").file(idCard)
+    MockMultipartFile idCardBack = new MockMultipartFile("idCardBack", "id-back.jpg", "image/jpeg", pngBack);
+    String body = mvc.perform(multipart("/api/auth/register").file(idCard).file(idCardBack)
         .param("fullName", "Test User").param("phone", "01712345678").param("email", email)
         .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
+        .param("batch", "44")
         .param("address", "123 Test Road").param("studentId", "CSE-" + System.nanoTime()).param("password", "Password1"))
       .andExpect(status().isCreated())
       .andReturn().getResponse().getContentAsString();

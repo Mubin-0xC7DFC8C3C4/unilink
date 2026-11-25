@@ -130,8 +130,9 @@ public class AuthController {
     return auth.verificationStatus(p.userId());
   }
   @PostMapping(value="/api/auth/verification/resubmit", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
-  public UserDto resubmit(Authentication authn, @RequestPart(value="idCard", required=false) MultipartFile idCard){
+  public UserDto resubmit(Authentication authn, @RequestPart(value="idCard", required=false) MultipartFile idCard,
+      @RequestPart(value="idCardBack", required=false) MultipartFile idCardBack){
     var p = requireStudentPrincipal(authn);
-    return auth.resubmit(p.userId(), idCard);
+    return auth.resubmit(p.userId(), idCard, idCardBack);
   }
 }

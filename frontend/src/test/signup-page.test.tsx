@@ -7,11 +7,12 @@ import { AuthProvider } from '../app/auth';
 import { ThemeProvider } from '../app/ThemeContext';
 import SignUp from '../features/auth/SignUp';
 
-/** SignUp (owner brief 2026-11-25 §1/§2): ten fields, one student ID
- *  card image, no profile photo at registration (that stays in
- *  Settings → Edit Profile), "University Address", per-field validation
- *  with the brief's exact messages, and the 4-rule password checklist
- *  from the real backend rules. */
+/** SignUp (owner brief 2026-11-25 §1/§2, D-190/D-193/D-194): ten fields,
+ *  TWO student ID card images (front + back), no profile photo at
+ *  registration (that stays in Settings → Edit Profile), "University
+ *  Address", free-text batch/session, department as a dropdown or a typed
+ *  label, per-field validation with the brief's exact messages, and the
+ *  4-rule password checklist from the real backend rules. */
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -49,8 +50,7 @@ async function toStep3(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
   await user.click(screen.getByLabelText('Department'));
   await user.click(await screen.findByRole('option', { name: 'CSE' }));
-  await user.click(screen.getByLabelText('Batch'));
-  await user.click(await screen.findByRole('option', { name: '45' }));
+  await user.type(screen.getByLabelText('Batch / Session'), '45');
   await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
   await user.click(screen.getByRole('button', { name: /Continue/ }));
   await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
@@ -109,12 +109,12 @@ describe('SignUp page (2026-11-25 upgrade)', () => {
     expect(screen.getAllByRole('listitem').every((li) => li.classList.contains('met'))).toBe(true);
   });
 
-  it('has no profile photo upload at registration', async () => {
+  it('has two ID card uploads (front + back) and no profile photo at registration', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
     expect(screen.queryByLabelText(/Profile photo/)).toBeNull();
-    expect(screen.queryByLabelText(/Back side/)).toBeNull();
-    expect(screen.getByLabelText('Student ID card image')).toBeInTheDocument();
+    expect(screen.getByLabelText('Student ID card — front')).toBeInTheDocument();
+    expect(screen.getByLabelText('Student ID card — back')).toBeInTheDocument();
   });
 
   it('blocks submission when the passwords do not match', async () => {
@@ -122,43 +122,101 @@ describe('SignUp page (2026-11-25 upgrade)', () => {
     await toStep3(user);
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password2');
-    await user.upload(screen.getByLabelText('Student ID card image'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card — front'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
     await screen.findByText('Passwords do not match');
     expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
   });
 
-  it('requires the ID card image before submitting', async () => {
+  it('requires the front ID card image before submitting', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password1');
     await user.click(screen.getByRole('button', { name: 'Create account' }));
-    await screen.findByText('Please upload your student ID card image.');
+    await screen.findByText('Please upload the front of your student ID card.');
     expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
+  });
+
+  it('requires the back ID card image before submitting', async () => {
+    const user = userEvent.setup(); renderPage();
+    await toStep3(user);
+    await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
+    await user.type(screen.getByLabelText('Confirm password'), 'Password1');
+    await user.upload(screen.getByLabelText('Student ID card — front'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText('Please upload the back of your student ID card.');
+    expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
+  });
+
+  it('rejects an invalid free-text batch before submitting', async () => {
+    const user = userEvent.setup(); renderPage();
+    await user.type(screen.getByLabelText('Full name'), 'Test User');
+    await user.type(screen.getByLabelText('Phone'), '01712345678');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
+    await user.click(screen.getByLabelText('Department'));
+    await user.click(await screen.findByRole('option', { name: 'CSE' }));
+    await user.type(screen.getByLabelText('Batch / Session'), 'Fall 2024!');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await screen.findByText('Batch/session may only contain letters, digits, spaces, hyphens, slashes, dots or parentheses');
+    expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
+  });
+
+  it('offers a typed department when the department is not listed', async () => {
+    const user = userEvent.setup(); renderPage();
+    await user.type(screen.getByLabelText('Full name'), 'Test User');
+    await user.type(screen.getByLabelText('Phone'), '01712345678');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
+    await user.click(screen.getByRole('button', { name: /type it instead/ }));
+    await user.type(screen.getByLabelText('Department'), 'Robotics and Mechatronics');
+    await user.type(screen.getByLabelText('Batch / Session'), 'Fall 2024');
+    await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
+    await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
+    await user.type(screen.getByLabelText('Confirm password'), 'Password1');
+    await user.upload(screen.getByLabelText('Student ID card — front'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card — back'), new File(['b'], 'id-back.jpg', { type: 'image/jpeg' }));
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText('VERIFICATION PAGE');
+    const reg = calls.find((c) => c.url === '/api/auth/register');
+    const fd = reg?.body as FormData;
+    expect(fd.get('departmentId')).toBeNull();
+    expect(fd.get('departmentLabel')).toBe('Robotics and Mechatronics');
+    expect(fd.get('batch')).toBe('Fall 2024');
   });
 
   it('rejects a non-image file on the ID card upload', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
-    const input = screen.getByLabelText('Student ID card image');
+    const input = screen.getByLabelText('Student ID card — front');
     fireEvent.change(input, { target: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } });
     await screen.findByText('Use a JPG, PNG or WebP image.');
   });
 
-  it('submits the single ID card and navigates to the verification flow', async () => {
+  it('submits both ID card images and the free-text batch, then navigates to the verification flow', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password1');
-    await user.upload(screen.getByLabelText('Student ID card image'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card — front'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card — back'), new File(['b'], 'id-back.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
     await screen.findByText('VERIFICATION PAGE');
     const reg = calls.find((c) => c.url === '/api/auth/register');
     const fd = reg?.body as FormData;
     expect((fd.get('idCard') as File).name).toBe('id.jpg');
+    expect((fd.get('idCardBack') as File).name).toBe('id-back.jpg');
+    expect(fd.get('batch')).toBe('45');
+    expect(fd.get('batchId')).toBeNull();
+    expect(fd.get('departmentId')).toBe('10');
     expect(fd.get('profilePhoto')).toBeNull();
-    expect(fd.get('idCardBack')).toBeNull();
     expect(sessionStorage.getItem('unilink:verificationToken')).toBe('tok-42');
   });
 });

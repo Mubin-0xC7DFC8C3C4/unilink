@@ -5,9 +5,9 @@ import java.time.LocalDateTime;
  *  Record components mirror the entity JSON field names; no secrets or storage keys. */
 public final class CatalogDtos {
   private CatalogDtos(){}
-  public record UniversityDto(Long id, String name, String shortName, String emailDomains, Boolean active,
+  public record UniversityDto(Long id, String name, String shortName, String category, String emailDomains, Boolean active,
                               LocalDateTime createdAt, LocalDateTime updatedAt){
-    public static UniversityDto from(University u){ return new UniversityDto(u.getId(), u.getName(), u.getShortName(), u.getEmailDomains(), u.getActive(), u.getCreatedAt(), u.getUpdatedAt()); }
+    public static UniversityDto from(University u){ return new UniversityDto(u.getId(), u.getName(), u.getShortName(), u.getCategory(), u.getEmailDomains(), u.getActive(), u.getCreatedAt(), u.getUpdatedAt()); }
   }
   public record DepartmentDto(Long id, Long universityId, Long catalogId, String name, Boolean active, LocalDateTime createdAt){
     public static DepartmentDto from(Department d){ return new DepartmentDto(d.getId(), d.getUniversityId(), d.getCatalogId(), d.getName(), d.getActive(), d.getCreatedAt()); }

@@ -57,8 +57,9 @@ public class ProfileService {
       p==null?null:p.getLinks(), skillNames, sectorNames,
       follows.countByFollowedId(targetUserId), follows.countByFollowerId(targetUserId), owner,
       u.getUniversityId()==null?null:universities.findById(u.getUniversityId()).map(University::getName).orElse(null),
-      u.getDepartmentId()==null?null:departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null),
-      u.getBatchId()==null?null:batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null));
+      // D-193/D-194: the free-text label wins; the legacy row is the fallback.
+      u.getDepartmentLabel()!=null?u.getDepartmentLabel():(u.getDepartmentId()==null?null:departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null)),
+      u.getBatchLabel()!=null?u.getBatchLabel():(u.getBatchId()==null?null:batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null)));
   }
   @Transactional
   public ProfileDto updateOwn(Long userId, String bio, String headline, String links, Boolean phoneVisible){
@@ -247,9 +248,12 @@ public class ProfileService {
   // ---- people lists, suggestions, unified activity (2026-11-22) ----
   public record PersonDto(Long userId, String fullName, String department, String university, String batch, boolean followedByViewer) {}
   private PersonDto toPerson(User u, Long viewerId){
-    String dept = u.getDepartmentId()==null ? null : departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null);
+    // D-193/D-194: the free-text label wins; the legacy row is the fallback.
+    String dept = u.getDepartmentLabel()!=null ? u.getDepartmentLabel()
+        : (u.getDepartmentId()==null ? null : departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null));
     String uni = u.getUniversityId()==null ? null : universities.findById(u.getUniversityId()).map(University::getName).orElse(null);
-    String batch = u.getBatchId()==null ? null : batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null);
+    String batch = u.getBatchLabel()!=null ? u.getBatchLabel()
+        : (u.getBatchId()==null ? null : batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null));
     boolean followed = viewerId!=null && follows.existsByFollowerIdAndFollowedId(viewerId, u.getId());
     return new PersonDto(u.getId(), u.getFullName(), dept, uni, batch, followed);
   }

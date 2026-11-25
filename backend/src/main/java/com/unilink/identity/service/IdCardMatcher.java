@@ -27,6 +27,12 @@ public class IdCardMatcher {
   public static final String REASON_ADDRESS = "University address could not be matched.";
   public static final String REASON_UNCLEAR = "The ID card image is unclear. Please upload a sharper image.";
   public static final String REASON_INCONCLUSIVE = "We could not verify your ID card automatically. An administrator will review your application.";
+  /** D-191: back-side reasons. */
+  public static final String REASON_BACK_UNREADABLE = "The back of the ID card could not be read. Please upload a clearer image of the back.";
+  public static final String REASON_BACK_UNIVERSITY = "The university on the back of the ID card does not match your registration.";
+  public static final String REASON_SAME_SIDE = "The back image appears to show the front of the card. Please upload the back of your ID card.";
+  public static final String REASON_BATCH = "The batch/session on your ID card does not match the value you entered.";
+  public static final String REASON_EXPIRED = "The ID card appears to be expired. An administrator will review your application.";
 
   private static final double NAME_AUTO_THRESHOLD = 0.75;
   private static final double NAME_HARD_FAIL = 0.50;
@@ -186,6 +192,116 @@ public class IdCardMatcher {
     else if (addressConflict) reason = REASON_ADDRESS;
     else reason = REASON_INCONCLUSIVE;
     return new Decision(Outcome.MANUAL_REVIEW, reason, composite, idMatched, nameSim, uniMatched, dept);
+  }
+
+  /** Both sides of the card, combined (D-191). The front carries the
+   *  auto-verify gates (ID, name, university, department, address,
+   *  confidence); the back is consistency evidence (university, address,
+   *  readability) plus the same-side-twice, batch and validity signals.
+   *  A VERIFICATION_FAILED front is returned as-is — the back cannot
+   *  rescue a card whose front data contradicts the registration. When
+   *  the front would auto-verify, every back gate must also pass; when
+   *  the front is already MANUAL_REVIEW, a same-side or back-university
+   *  signal is more actionable than the front reason and wins. A weak
+   *  name similarity never overrides a conflicting student ID: the ID
+   *  match is a hard gate for AUTO_VERIFIED. */
+  public Decision matchTwoSided(String frontText, Double frontConfidence, String backText, Double backConfidence,
+                                String validity, String batch, Subject subject){
+    Decision front = match(frontText, frontConfidence, subject);
+    if (front.outcome() == Outcome.VERIFICATION_FAILED) return front;
+    String back = backText == null ? "" : backText;
+    List<String> backTokens = tokens(back);
+    Set<String> backSet = new HashSet<>(backTokens);
+    boolean backUnreadable = back.replaceAll("\\s+", "").length() < MIN_OCR_TEXT
+        || (backConfidence != null && backConfidence < UNCLEAR_CONFIDENCE);
+    boolean backSameSide = matchId(back, subject.studentId())
+        && matchName(backTokens, subject.fullName()) >= NAME_AUTO_THRESHOLD;
+    boolean backUniMatched = matchUniversity(backSet, subject.universityName());
+    boolean backUniConflict = universityConflict(backSet, subject.universityName());
+    boolean backAddressConflict = addressConflict(backSet, subject.address());
+    BatchResult batchResult = compareBatch(extractBatch(frontText), batch);
+    boolean expired = isExpired(validity);
+    if (front.outcome() == Outcome.AUTO_VERIFIED){
+      if (backSameSide) return manual(front, REASON_SAME_SIDE);
+      if (backUnreadable) return manual(front, REASON_BACK_UNREADABLE);
+      if (backUniConflict) return manual(front, REASON_BACK_UNIVERSITY);
+      if (!backUniMatched) return manual(front, REASON_UNIVERSITY);
+      if (backAddressConflict) return manual(front, REASON_ADDRESS);
+      if (batchResult == BatchResult.CONFLICT) return manual(front, REASON_BATCH);
+      if (expired) return manual(front, REASON_EXPIRED);
+      return front;
+    }
+    if (backSameSide) return manual(front, REASON_SAME_SIDE);
+    if (backUniConflict) return manual(front, REASON_BACK_UNIVERSITY);
+    return front;
+  }
+  private static Decision manual(Decision front, String reason){
+    return new Decision(Outcome.MANUAL_REVIEW, reason, front.compositeScore(),
+        front.idMatched(), front.nameSimilarity(), front.universityMatched(), front.department());
+  }
+
+  /** Batch/session printed on the card, from the front programme line:
+   *  "59th Batch" → "59", "Batch 59" → "59", "Session 2022-23" →
+   *  "2022-23". Null when the card prints no batch (neutral, never a
+   *  reject reason). Visible for testing. */
+  public enum BatchResult { MATCHED, NEUTRAL, CONFLICT }
+  public static String extractBatch(String ocrText){
+    if (ocrText == null) return null;
+    var ordinal = java.util.regex.Pattern.compile("(?i)(\\d{1,2})(st|nd|rd|th)\\s+batch").matcher(ocrText);
+    if (ordinal.find()) return ordinal.group(1);
+    var batch = java.util.regex.Pattern.compile("(?i)batch\\s*:?\\s*(\\d{1,4}(?:\\s*-\\s*\\d{2,4})?)").matcher(ocrText);
+    if (batch.find()) return batch.group(1).replaceAll("\\s+", "");
+    var session = java.util.regex.Pattern.compile("(?i)session\\s*:?\\s*(\\d{4}\\s*-\\s*\\d{2,4})").matcher(ocrText);
+    if (session.find()) return session.group(1).replaceAll("\\s+", "");
+    return null;
+  }
+  /** Compares the printed batch with the entered free-text batch (D-194).
+   *  Normalised (case, spaces, punctuation, ordinal suffixes) or by
+   *  digit sequence: "59" matches "59th Batch", "2022-23" matches
+   *  "Session 2022-23". A missing value on either side is NEUTRAL. */
+  public static BatchResult compareBatch(String cardBatch, String enteredBatch){
+    if (cardBatch == null || cardBatch.isBlank() || enteredBatch == null || enteredBatch.isBlank())
+      return BatchResult.NEUTRAL;
+    if (normalizeBatch(cardBatch).equals(normalizeBatch(enteredBatch))) return BatchResult.MATCHED;
+    String cardDigits = normalizeBatch(cardBatch).replaceAll("[^0-9]", "");
+    String enteredDigits = normalizeBatch(enteredBatch).replaceAll("[^0-9]", "");
+    if (!cardDigits.isEmpty() && cardDigits.equals(enteredDigits)) return BatchResult.MATCHED;
+    return BatchResult.CONFLICT;
+  }
+  /** Lower-cased, Bengali digits converted, ordinal suffixes stripped
+   *  ("59th" → "59"), punctuation and spaces removed. */
+  public static String normalizeBatch(String s){
+    if (s == null) return "";
+    String lower = latinDigits(s).toLowerCase().replaceAll("(\\d)(st|nd|rd|th)\\b", "$1");
+    return lower.replaceAll("[^a-z0-9]", "");
+  }
+
+  private static final Map<String, Integer> MONTHS = Map.ofEntries(
+      Map.entry("january", 1), Map.entry("jan", 1), Map.entry("february", 2), Map.entry("feb", 2),
+      Map.entry("march", 3), Map.entry("mar", 3), Map.entry("april", 4), Map.entry("apr", 4),
+      Map.entry("may", 5), Map.entry("june", 6), Map.entry("jun", 6), Map.entry("july", 7), Map.entry("jul", 7),
+      Map.entry("august", 8), Map.entry("aug", 8), Map.entry("september", 9), Map.entry("sep", 9), Map.entry("sept", 9),
+      Map.entry("october", 10), Map.entry("oct", 10), Map.entry("november", 11), Map.entry("nov", 11),
+      Map.entry("december", 12), Map.entry("dec", 12));
+  /** The end date of a validity string ("July'23 - June'27" → the last
+   *  day of June 2027), or null when it cannot be parsed. Visible for
+   *  testing. */
+  public static java.time.LocalDate parseValidityEnd(String validity){
+    if (validity == null) return null;
+    var m = java.util.regex.Pattern.compile("(?i)([A-Za-z]{3,9})'?(\\d{2})\\s*-\\s*([A-Za-z]{3,9})'?(\\d{2})").matcher(validity);
+    if (!m.find()) return null;
+    Integer endMonth = MONTHS.get(m.group(3).toLowerCase());
+    if (endMonth == null) return null;
+    int endYear = 2000 + Integer.parseInt(m.group(4));
+    return java.time.LocalDate.of(endYear, endMonth, 1)
+        .withDayOfMonth(java.time.LocalDate.of(endYear, endMonth, 1).lengthOfMonth());
+  }
+  /** True when the validity has a parseable end date in the past. An
+   *  unparseable or absent validity is false (neutral). */
+  public static boolean isExpired(String validity){ return isExpired(validity, java.time.LocalDate.now()); }
+  public static boolean isExpired(String validity, java.time.LocalDate today){
+    java.time.LocalDate end = parseValidityEnd(validity);
+    return end != null && end.isBefore(today);
   }
 
   /** The normalised ID must appear on a single OCR line: stripping

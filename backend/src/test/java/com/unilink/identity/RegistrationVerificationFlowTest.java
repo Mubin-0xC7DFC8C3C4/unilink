@@ -48,15 +48,19 @@ class RegistrationVerificationFlowTest {
   @BeforeEach void reset(){ TestProviders.reset(); throttle.resetForTests(); }
 
   private static final byte[] PNG = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 1, 2, 3, 4};
+  /** D-190: the back image must differ from the front (byte-identical
+   *  uploads are rejected as the same image). */
+  private static final byte[] PNG_BACK = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 9, 8, 7, 6};
 
   /** Registers without a profile photo; returns the registration token. */
   private String register(String tag, String email) throws Exception {
     var f = factory.seedMaster();
     MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", PNG);
-    MvcResult result = mvc.perform(multipart("/api/auth/register").file(idCard)
+    MockMultipartFile idCardBack = new MockMultipartFile("idCardBack", "id-back.jpg", "image/jpeg", PNG_BACK);
+    MvcResult result = mvc.perform(multipart("/api/auth/register").file(idCard).file(idCardBack)
         .param("fullName", "Tanvir Mahmud").param("phone", "01712345678").param("email", email)
         .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
-        .param("batchId", f.muBatch().getId().toString())
+        .param("batch", "44")
         .param("address", "House 12, Road 5, Dhanmondi, Dhaka")
         .param("studentId", "RV-" + tag + "-" + System.nanoTime()).param("password", "Password1"))
       .andExpect(status().isCreated())
@@ -155,10 +159,12 @@ class RegistrationVerificationFlowTest {
   @Test void registrationStillAcceptsAnOptionalProfilePhoto() throws Exception {
     var f = factory.seedMaster();
     MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", PNG);
+    MockMultipartFile idCardBack = new MockMultipartFile("idCardBack", "id-back.jpg", "image/jpeg", PNG_BACK);
     MockMultipartFile photo = new MockMultipartFile("profilePhoto", "photo.jpg", "image/jpeg", PNG);
-    mvc.perform(multipart("/api/auth/register").file(idCard).file(photo)
+    mvc.perform(multipart("/api/auth/register").file(idCard).file(idCardBack).file(photo)
         .param("fullName", "Photo User").param("phone", "01712345679").param("email", "rv-photo-" + System.nanoTime() + "@example.com")
         .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
+        .param("batch", "44")
         .param("address", "Dhanmondi, Dhaka").param("studentId", "RV-PHOTO-" + System.nanoTime()).param("password", "Password1"))
       .andExpect(status().isCreated());
   }

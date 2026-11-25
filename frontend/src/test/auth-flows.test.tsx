@@ -60,7 +60,7 @@ describe('SignUp (I-6)', () => {
     if (url === '/api/auth/register' && method === 'POST') return json({ id: 42, fullName: 'Test User', state: 'REGISTERED', verificationToken: 'tok-42' }, 201);
     return defaultRoute(url);
   }
-  it('loads the catalog and submits universityId/departmentId/batchId + one idCard, then goes to verification', async () => {
+  it('loads the catalog and submits universityId/departmentId/batch + two idCards, then goes to verification', async () => {
     route = catalogRoute;
     const user = userEvent.setup();
     renderWithProviders(<Routes><Route path="/signup" element={<SignUp />} /><Route path="/verification" element={<div>VERIFICATION PAGE</div>} /></Routes>, ['/signup']);
@@ -68,24 +68,25 @@ describe('SignUp (I-6)', () => {
     await user.type(screen.getByLabelText('Phone'), '01712345678');
     await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
-    // Phase 2.2: university/department/batch are searchable selectors over
-    // the same catalogue endpoints — pick from the filtered list.
+    // Phase 2.2: university/department are searchable selectors over the
+    // catalogue endpoints — pick from the filtered list. Batch is free
+    // text (D-194), so no batch endpoint is called any more.
     await user.click(screen.getByLabelText('University'));
     await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
     expect(calls.some((c) => c.url === '/api/public/departments?universityId=1')).toBe(true);
     await user.click(screen.getByLabelText('Department'));
     await user.click(await screen.findByRole('option', { name: 'CSE' }));
-    await user.click(screen.getByLabelText('Batch'));
-    await user.click(await screen.findByRole('option', { name: '45' }));
+    await user.type(screen.getByLabelText('Batch / Session'), '45');
     await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password1');
-    // One student ID card image only (D-177/D-178): no back side, no
-    // profile photo at registration — the photo is uploaded later from
-    // Settings → Edit Profile.
-    await user.upload(screen.getByLabelText('Student ID card image'), new File(['id'], 'id-card.jpg', { type: 'image/jpeg' }));
+    // Two student ID card images (D-190): front + back, both required.
+    // No profile photo at registration — the photo is uploaded later
+    // from Settings → Edit Profile (D-178).
+    await user.upload(screen.getByLabelText('Student ID card — front'), new File(['id'], 'id-card.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card — back'), new File(['back'], 'id-card-back.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
     await screen.findByText('VERIFICATION PAGE');
     const reg = calls.find((c) => c.url === '/api/auth/register');
@@ -93,10 +94,11 @@ describe('SignUp (I-6)', () => {
     const fd = reg?.body as FormData;
     expect(fd.get('universityId')).toBe('1');
     expect(fd.get('departmentId')).toBe('10');
-    expect(fd.get('batchId')).toBe('100');
+    expect(fd.get('batch')).toBe('45');
+    expect(fd.get('batchId')).toBeNull();
     expect(fd.get('phone')).toBe('01712345678');
     expect((fd.get('idCard') as File).name).toBe('id-card.jpg');
-    expect(fd.get('idCardBack')).toBeNull();
+    expect((fd.get('idCardBack') as File).name).toBe('id-card-back.jpg');
     expect(fd.get('profilePhoto')).toBeNull();
     expect(fd.get('confirmPassword')).toBeNull();
     expect(fd.get('idCardImage')).toBeNull();
@@ -104,7 +106,7 @@ describe('SignUp (I-6)', () => {
     // hand-off is gone with the phone step (D-173).
     expect(sessionStorage.getItem('unilink:verificationToken')).toBe('tok-42');
     expect(sessionStorage.getItem('unilink:otpUserId')).toBeNull();
-    expect(calls.some((c) => c.url.startsWith('/api/public/batches?universityId=1'))).toBe(true);
+    expect(calls.some((c) => c.url.startsWith('/api/public/batches'))).toBe(false);
   });
   it('rejects a non-Bangladeshi phone number before any register call', async () => {
     route = catalogRoute;
@@ -174,7 +176,7 @@ describe('Signup catalogue chain (2026-11-24)', () => {
     await user.click(screen.getByLabelText('University'));
     await screen.findByRole('option', { name: 'Metropolitan University' });
   }, 90000);
-  it('loads departments for the chosen university and batches for the chosen department, and resets children on change', async () => {
+  it('loads departments for the chosen university, keeps the typed batch on catalogue changes, and resets the department on university change', async () => {
     route = catalog;
     const user = userEvent.setup();
     await toStep1(user);
@@ -183,22 +185,24 @@ describe('Signup catalogue chain (2026-11-24)', () => {
     expect(calls.some((c) => c.url === '/api/public/departments?universityId=1')).toBe(true);
     await user.click(screen.getByLabelText('Department'));
     await user.click(await screen.findByRole('option', { name: 'CSE' }));
-    expect(calls.some((c) => c.url.startsWith('/api/public/batches?universityId=1&departmentId=10'))).toBe(true);
-    await user.click(screen.getByLabelText('Batch'));
-    await user.click(await screen.findByRole('option', { name: '45' }));
-    expect(screen.getByLabelText('Batch')).toHaveValue('45');
-    // Changing the department resets the batch. (The searchable select
-    // filters by the current value, so clear the text first to see all options.)
+    // Batch is free text (D-194): typed, not selected — and no batch
+    // endpoint is called any more.
+    await user.type(screen.getByLabelText('Batch / Session'), '45');
+    expect(screen.getByLabelText('Batch / Session')).toHaveValue('45');
+    expect(calls.some((c) => c.url.startsWith('/api/public/batches'))).toBe(false);
+    // Changing the department does not reset the typed batch: it is the
+    // user's own value, not a catalogue child.
     await user.clear(screen.getByLabelText('Department'));
     await user.click(screen.getByLabelText('Department'));
     await user.click(await screen.findByRole('option', { name: 'EEE' }));
-    expect(screen.getByLabelText('Batch')).toHaveValue('');
-    // Changing the university resets department and batch.
+    expect(screen.getByLabelText('Batch / Session')).toHaveValue('45');
+    // Changing the university resets the department (and reloads it) but
+    // keeps the typed batch.
     await user.clear(screen.getByLabelText('University'));
     await user.click(screen.getByLabelText('University'));
     await user.click(await screen.findByRole('option', { name: 'University of Dhaka' }));
     expect(screen.getByLabelText('Department')).toHaveValue('');
-    expect(screen.getByLabelText('Batch')).toHaveValue('');
+    expect(screen.getByLabelText('Batch / Session')).toHaveValue('45');
     expect(calls.some((c) => c.url === '/api/public/departments?universityId=2')).toBe(true);
   });
   it('a slow response for the previous university never overwrites the current dropdown', async () => {

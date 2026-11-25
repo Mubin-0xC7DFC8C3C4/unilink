@@ -33,7 +33,10 @@ public class SecurityConfig {
     return username -> {
       var user = users.findByEmail(username).orElseThrow(() -> new UsernameNotFoundException(username));
       var cred = creds.findById(user.getId()).orElseThrow(() -> new UsernameNotFoundException(username));
-      Long catalogId = depts.findById(user.getDepartmentId()).map(d->d.getCatalogId()).orElse(null);
+      // D-193: departmentId is nullable now (free-text department) —
+      // Spring Data findById(null) throws, so guard it. A null department
+      // simply means no catalog id on the principal.
+      Long catalogId = user.getDepartmentId() == null ? null : depts.findById(user.getDepartmentId()).map(d->d.getCatalogId()).orElse(null);
       return new Principals.UnilinkUserPrincipal(user.getId(), user.getEmail(), cred.getPasswordHash(),
         user.getUniversityId(), user.getDepartmentId(), catalogId, user.getState(), true);
     };

@@ -255,7 +255,7 @@ class Phase3WorkerDTest {
     RegisterForm form = new RegisterForm();
     form.setFullName("New Student"); form.setPhone("01744444444");
     form.setEmail("d3-newsusp@example.com"); form.setUniversityId(f.mu().getId());
-    form.setDepartmentId(f.muCse().getId()); form.setBatchId(f.muBatch().getId());
+    form.setDepartmentId(f.muCse().getId()); form.setBatch("44");
     form.setAddress("Dhaka"); form.setStudentId("D3NEW1"); form.setPassword("Student123");
     form.setIdCard(new MockMultipartFile("idCard", "id.png", "image/png", PNG));
     form.setProfilePhoto(new MockMultipartFile("profilePhoto", "photo.png", "image/png", PNG));
@@ -275,7 +275,7 @@ class Phase3WorkerDTest {
       att.setUserId(u.getId()); att.setVerificationRequestId(requestOf(u).getId());
       att.setOutcome(i == 0 ? "APPROVED" : "REJECTED"); attempts.save(att);
     }
-    assertDoesNotThrow(() -> auth.resubmit(u.getId(), null));
+    assertDoesNotThrow(() -> auth.resubmit(u.getId(), null, null));
     assertEquals("PENDING_REVIEW", users.findById(u.getId()).orElseThrow().getState());
   }
 
@@ -287,7 +287,7 @@ class Phase3WorkerDTest {
       VerificationAttempt att = new VerificationAttempt();
       att.setUserId(u.getId()); att.setVerificationRequestId(requestOf(u).getId()); att.setOutcome("RESUBMIT"); attempts.save(att);
     }
-    assertThrows(Exceptions.TooManyRequests.class, () -> auth.resubmit(u.getId(), null));
+    assertThrows(Exceptions.TooManyRequests.class, () -> auth.resubmit(u.getId(), null, null));
   }
 
   // ---- I-18: identity-change decide path ----

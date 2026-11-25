@@ -51,10 +51,10 @@ describe('Input forwards refs to react-hook-form', () => {
   });
 });
 describe('sign-up validation', () => {
-  // I-6: the schema now takes catalog ids (universityId/departmentId/batchId
-  // as numbers) and a Bangladeshi mobile number — the old free-text
-  // university/department/batch shape was the wrong contract.
-  const valid = {fullName:'A B',phone:'01700000000',email:'a@b.edu',universityId:1,departmentId:10,batchId:100,address:'Dhaka',studentId:'1',password:'Strong1pass',confirmPassword:'Strong1pass'};
+  // D-193/D-194: the schema now takes a catalog department id OR a typed
+  // department label, and a free-text batch string — the old numeric
+  // batchId shape is gone.
+  const valid = {fullName:'A B',phone:'01700000000',email:'a@b.edu',universityId:1,departmentId:10,batch:'44',address:'Dhaka',studentId:'1',password:'Strong1pass',confirmPassword:'Strong1pass'};
   it('rejects weak passwords', () => {
     const r = signUpSchema.safeParse({...valid,password:'weak'});
     expect(r.success).toBe(false);
@@ -62,6 +62,19 @@ describe('sign-up validation', () => {
   it('accepts a strong password', () => {
     const r = signUpSchema.safeParse(valid);
     expect(r.success).toBe(true);
+  });
+  it('accepts a typed department label instead of a catalog id', () => {
+    const r = signUpSchema.safeParse({...valid,departmentId:undefined,departmentLabel:'Robotics and Mechatronics'});
+    expect(r.success).toBe(true);
+  });
+  it('accepts the free-text batch formats', () => {
+    for (const batch of ['44','45','2022-23','Fall 2024','Spring 2025','2023','59th Batch']){
+      expect(signUpSchema.safeParse({...valid,batch}).success).toBe(true);
+    }
+  });
+  it('rejects an invalid free-text batch', () => {
+    expect(signUpSchema.safeParse({...valid,batch:'Fall 2024!'}).success).toBe(false);
+    expect(signUpSchema.safeParse({...valid,batch:'a'.repeat(33)}).success).toBe(false);
   });
   it('rejects bad email', () => {
     const r = signUpSchema.safeParse({...valid,email:'not-email'});

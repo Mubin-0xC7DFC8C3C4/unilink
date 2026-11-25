@@ -12,7 +12,15 @@ public final class AuthDtos {
     @NotBlank @Pattern(regexp="^01[3-9]\\d{8}$", message="Phone must be a Bangladeshi mobile number, e.g. 01712345678")
     private String phone;
     @NotBlank @Email private String email;
-    @NotNull private Long universityId; @NotNull private Long departmentId; private Long batchId;
+    @NotNull private Long universityId;
+    /** D-193: department is a catalog id OR a free-text label — exactly
+     *  one is required (enforced in AuthService.register). The label
+     *  covers universities with no verified department rows and students
+     *  whose department is not listed. */
+    private Long departmentId; private String departmentLabel;
+    /** D-194: batch/session is free text ("44", "2022-23", "Fall 2024"),
+     *  stored verbatim. The old numeric batchId is gone from registration. */
+    private String batch;
     @NotBlank private String address; @NotBlank private String studentId;
     @NotBlank private String password; private MultipartFile idCard; private MultipartFile idCardBack; private MultipartFile profilePhoto;
     public String getFullName(){return fullName;} public void setFullName(String v){fullName=v;}
@@ -20,7 +28,8 @@ public final class AuthDtos {
     public String getEmail(){return email;} public void setEmail(String v){email=v;}
     public Long getUniversityId(){return universityId;} public void setUniversityId(Long v){universityId=v;}
     public Long getDepartmentId(){return departmentId;} public void setDepartmentId(Long v){departmentId=v;}
-    public Long getBatchId(){return batchId;} public void setBatchId(Long v){batchId=v;}
+    public String getDepartmentLabel(){return departmentLabel;} public void setDepartmentLabel(String v){departmentLabel=v;}
+    public String getBatch(){return batch;} public void setBatch(String v){batch=v;}
     public String getAddress(){return address;} public void setAddress(String v){address=v;}
     public String getStudentId(){return studentId;} public void setStudentId(String v){studentId=v;}
     public String getPassword(){return password;} public void setPassword(String v){password=v;}
@@ -37,7 +46,8 @@ public final class AuthDtos {
   public record ChangePasswordRequest(@NotBlank String oldPassword, @NotBlank String newPassword) {}
   public record DeleteAccountRequest(@NotBlank String password) {}
   public record UserDto(Long id, String fullName, String email, String phone, Long universityId, Long departmentId,
-                        Long batchId, String studentId, String state, boolean phoneVerified, boolean emailVerified,
+                        String departmentLabel, Long batchId, String batchLabel, String studentId, String state,
+                        boolean phoneVerified, boolean emailVerified,
                         LocalDateTime createdAt, boolean mustChangePassword, Boolean emailSent,
                         /** D-175: registration token, present only in the register / resubmit response. */ String verificationToken) {}
   /** Resend of the email verification link: either the user id (from the

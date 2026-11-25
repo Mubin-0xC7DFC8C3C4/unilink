@@ -6,19 +6,20 @@ import java.time.LocalDateTime;
  *  which are never exposed: AdminAccount.passwordHash, User/VerificationRequest idCardKey/profilePhotoKey. */
 public final class AdminDtos {
   private AdminDtos(){}
-  public record AdminUserDto(Long id, Long version, Long universityId, Long departmentId, Long batchId,
+  public record AdminUserDto(Long id, Long version, Long universityId, Long departmentId, String departmentLabel,
+                             Long batchId, String batchLabel,
                              String fullName, String email, String phone, String address, String studentId,
                              String state, LocalDateTime phoneVerifiedAt, LocalDateTime emailVerifiedAt,
                              LocalDateTime createdAt, LocalDateTime updatedAt){
-    public static AdminUserDto from(User u){ return new AdminUserDto(u.getId(), u.getVersion(), u.getUniversityId(), u.getDepartmentId(), u.getBatchId(), u.getFullName(), u.getEmail(), u.getPhone(), u.getAddress(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt(), u.getEmailVerifiedAt(), u.getCreatedAt(), u.getUpdatedAt()); }
+    public static AdminUserDto from(User u){ return new AdminUserDto(u.getId(), u.getVersion(), u.getUniversityId(), u.getDepartmentId(), u.getDepartmentLabel(), u.getBatchId(), u.getBatchLabel(), u.getFullName(), u.getEmail(), u.getPhone(), u.getAddress(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt(), u.getEmailVerifiedAt(), u.getCreatedAt(), u.getUpdatedAt()); }
   }
   public record VerificationRequestDto(Long id, Long version, Long userId, String status, String reason,
-                                       String ocrText, Double ocrMatchScore, String ocrStatus,
+                                       String ocrText, String ocrTextBack, Double ocrMatchScore, String ocrStatus,
                                        LocalDateTime submittedAt, LocalDateTime decidedAt, Long decidedBy,
                                        LocalDateTime createdAt, String fullName, String email,
                                        String university, String studentId, Long previousAttempts,
                                        Boolean duplicatePhone){
-    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null, null); }
+    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrTextBack(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null, null); }
     /** Queue enrichment: applicant identity comes from the User row, not the request. */
     public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts){
       return from(r, u, universityName, previousAttempts, false);
@@ -27,7 +28,7 @@ public final class AdminDtos {
      *  another account shares this applicant's phone number. */
     public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts, boolean duplicatePhone){
       return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(),
-        r.getOcrText(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(),
+        r.getOcrText(), r.getOcrTextBack(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(),
         r.getCreatedAt(), u==null?null:u.getFullName(), u==null?null:u.getEmail(), universityName,
         u==null?null:u.getStudentId(), previousAttempts, duplicatePhone);
     }

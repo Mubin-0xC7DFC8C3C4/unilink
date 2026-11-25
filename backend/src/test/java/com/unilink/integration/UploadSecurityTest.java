@@ -187,9 +187,10 @@ class UploadSecurityTest {
     var f = factory.seedMaster();
     RegisterForm form = new RegisterForm();
     form.setFullName("Upload Sec"); form.setPhone("01712345678"); form.setEmail("up-new@example.com");
-    form.setUniversityId(f.mu().getId()); form.setDepartmentId(f.muCse().getId()); form.setBatchId(f.muBatch().getId());
+    form.setUniversityId(f.mu().getId()); form.setDepartmentId(f.muCse().getId()); form.setBatch("44");
     form.setAddress("Test address"); form.setStudentId("UPNEW"); form.setPassword("Student123");
     form.setIdCard(new MockMultipartFile("idCard", "id.jpg", "image/jpeg", jpegWithGpsExif()));
+    form.setIdCardBack(new MockMultipartFile("idCardBack", "id-back.png", "image/png", pngWithExif()));
     form.setProfilePhoto(new MockMultipartFile("profilePhoto", "photo.png", "image/png", pngWithExif()));
     auth.register(form);
     User u = user("up-new@example.com");
@@ -205,7 +206,7 @@ class UploadSecurityTest {
     u.setAddress("Test address"); u.setStudentId("UPREJ"); u.setUniversityId(f.mu().getId());
     u.setDepartmentId(f.muCse().getId()); u.setBatchId(f.muBatch().getId()); u.setState("REJECTED");
     u = users.save(u);
-    auth.resubmit(u.getId(), new MockMultipartFile("idCard", "id.jpg", "image/jpeg", jpegWithGpsExif()));
+    auth.resubmit(u.getId(), new MockMultipartFile("idCard", "id.jpg", "image/jpeg", jpegWithGpsExif()), null);
     byte[] stored = storedBytes(user("up-rej@example.com").getIdCardKey());
     assertFalse(containsText(stored, "Exif"), "resubmitted ID card must not contain EXIF");
     assertFalse(contains(stored, GPS), "resubmitted ID card must not contain the GPS payload");

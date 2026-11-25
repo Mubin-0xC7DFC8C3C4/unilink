@@ -27,7 +27,7 @@ export interface AchievementItem { id: string|number; title?: string; descriptio
 // --- AUTH TYPES (auth worker, I-4/I-5/I-6/I-10) ---
 // Anchor: everything below this line is the auth section. Another worker owns
 // the non-auth types above; keep auth additions inside this block.
-export interface CatalogUniversity { id: number; name: string; shortName?: string; active?: boolean }
+export interface CatalogUniversity { id: number; name: string; shortName?: string; category?: string; active?: boolean }
 export interface CatalogDepartment { id: number; universityId: number; catalogId?: number; name: string; active?: boolean }
 export interface CatalogBatch { id: number; universityId: number; departmentId?: number; label: string; startYear?: number; active?: boolean }
 /** Bangladeshi mobile: 11 digits, 01[3-9]xxxxxxxx. Must match the backend

@@ -22,6 +22,72 @@ public class TesseractOcrAdapter implements OcrProvider {
   @Override public Result extract(byte[] imageBytes, String fileName, String fullName, String studentId){
     return extract(imageBytes, fileName, fullName, studentId, null);
   }
+  /** D-191: OCR both sides. The back is read with the same adapter path;
+   *  a second pass on the back rotated 90 degrees counter-clockwise reads
+   *  the vertical validity strip ("Validity : July'23 - June'27") that
+   *  the default psm 6 pass cannot see — the strip is on the card's left
+   *  edge and only the rotated text is searched for it, so the garbled
+   *  rest of the rotated image is harmless. A null back image yields an
+   *  empty FAILED back side (the matcher treats it as unreadable). */
+  @Override public TwoSidedResult extractTwoSided(byte[] frontBytes, byte[] backBytes, String frontName, String backName,
+                                                  String fullName, String studentId, String universityName){
+    Result front = extract(frontBytes, frontName, fullName, studentId, universityName);
+    Result back = backBytes == null ? new Result("", 0.0, "FAILED", null)
+        : extract(backBytes, backName, fullName, studentId, universityName);
+    String validity = backBytes == null ? null : extractValidity(backBytes);
+    return new TwoSidedResult(new SideResult(front.text(), front.confidence(), front.status()),
+        new SideResult(back.text(), back.confidence(), back.status()), validity);
+  }
+  /** The validity strip, e.g. "July'23 - June'27". The prefix is
+   *  deliberately tolerant: real Tesseract output misreads "Validity"
+   *  as "Valiaity" (the 'd' becomes 'a'), so the pattern accepts any
+   *  v…t[yi] word before the date range. Only the first match is
+   *  returned; an unreadable or absent strip is null (neutral). */
+  private static final java.util.regex.Pattern VALIDITY_PATTERN =
+      java.util.regex.Pattern.compile("(?i)v[a-z]{1,6}t[yi][^A-Za-z0-9]{0,5}([A-Za-z]{3,9}'?\\d{2}\\s*-\\s*[A-Za-z]{3,9}'?\\d{2})");
+  static String findValidity(String text){
+    if (text == null) return null;
+    var m = VALIDITY_PATTERN.matcher(text);
+    return m.find() ? m.group(1).trim() : null;
+  }
+  /** Rotates the image 90 degrees counter-clockwise (the direction that
+   *  makes a left-edge vertical strip read horizontally) and runs
+   *  Tesseract on it, returning the validity string or null. Best effort:
+   *  any failure is null, never an exception. Visible for testing. */
+  static String extractValidity(byte[] backBytes){
+    try {
+      byte[] rotated = rotate90Ccw(backBytes);
+      if (rotated == null) return null;
+      byte[] prepared = preprocess(rotated);
+      Path tmp = Files.createTempFile("unilink-ocr-validity-", ".png"); Files.write(tmp, prepared);
+      try {
+        TsvRun run = runTesseract(tmp, "eng");
+        return run == null ? null : findValidity(run.text());
+      } finally { Files.deleteIfExists(tmp); }
+    } catch (Exception e){ return null; }
+  }
+  /** 90-degree counter-clockwise rotation (PIL Image.rotate(90)
+   *  equivalent), re-encoded as PNG. Returns null when the bytes are not
+   *  a decodable image. Visible for testing. */
+  static byte[] rotate90Ccw(byte[] imageBytes){
+    try {
+      BufferedImage src = ImageIO.read(new ByteArrayInputStream(imageBytes));
+      if (src == null) return null;
+      int w = src.getWidth(), h = src.getHeight();
+      BufferedImage out = new BufferedImage(h, w, BufferedImage.TYPE_INT_RGB);
+      Graphics2D g = out.createGraphics();
+      g.setColor(java.awt.Color.WHITE); g.fillRect(0, 0, h, w);
+      java.awt.geom.AffineTransform at = new java.awt.geom.AffineTransform();
+      at.translate(h / 2.0, w / 2.0);
+      at.rotate(Math.toRadians(-90));
+      at.translate(-w / 2.0, -h / 2.0);
+      g.drawImage(src, at, null);
+      g.dispose();
+      java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+      if (!ImageIO.write(out, "png", baos)) return null;
+      return baos.toByteArray();
+    } catch (Exception e){ return null; }
+  }
   /** I-12: university name is scored as well (FR-AUTH-06). The 5-arg form
    *  is the real entry point; the 4-arg form keeps the old call shape. */
   @Override public Result extract(byte[] imageBytes, String fileName, String fullName, String studentId, String universityName){

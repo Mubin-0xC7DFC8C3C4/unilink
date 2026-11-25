@@ -14,6 +14,13 @@ public class VerificationRequest {
   @Column(name="ocr_match_score") private Double ocrMatchScore;
   @Column(name="ocr_status") private String ocrStatus;
   @Column(name="id_card_key") private String idCardKey;
+  /** D-190: the BACK of the ID card, stored separately from the front
+   *  and carried on the same verification request (V015). */
+  @Column(name="id_card_back_key") private String idCardBackKey;
+  /** D-191: OCR text of the back of the card (university, address,
+   *  validity), admin-only evidence alongside ocrText. */
+  @Lob
+  @Column(name="ocr_text_back") private String ocrTextBack;
   @Column(name="profile_photo_key") private String profilePhotoKey;
   /** Registration token (D-175): only the SHA-256 hash is stored. The
    *  plaintext token is returned once, in the register response, and
