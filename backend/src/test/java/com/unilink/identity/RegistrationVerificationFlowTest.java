@@ -84,10 +84,34 @@ class RegistrationVerificationFlowTest {
     fail("OCR did not finish within 10 s");
     return null;
   }
-  private String emailCode(String email){
-    String code = TestProviders.EMAIL_OTPS.get(email);
-    assertNotNull(code, "an email OTP code must have been sent after AUTO_VERIFIED");
-    return code;
+  private String emailCode(String email) throws Exception {
+    // D-188 (2026-11-25): the OCR job persists AUTO_VERIFIED in one
+    // transaction and sends the email OTP from its own transaction, so
+    // the code can legitimately appear a moment after the status leaves
+    // PENDING. Poll for it instead of asserting it is already there.
+    long deadline = System.currentTimeMillis() + 10_000;
+    while (System.currentTimeMillis() < deadline){
+      String code = TestProviders.EMAIL_OTPS.get(email);
+      if (code != null) return code;
+      Thread.sleep(100);
+    }
+    fail("an email OTP code must have been sent after AUTO_VERIFIED");
+    return null;
+  }
+  /** Polls the token-scoped status until the email OTP has been sent.
+   *  D-188: same two-transaction window as emailCode — AUTO_VERIFIED can
+   *  be visible before the OTP row exists, so the flag must be awaited. */
+  private String waitForEmailOtpSent(String token) throws Exception {
+    long deadline = System.currentTimeMillis() + 10_000;
+    while (System.currentTimeMillis() < deadline){
+      MvcResult r = mvc.perform(get("/api/auth/registration/status").param("token", token))
+          .andExpect(status().isOk()).andReturn();
+      String body = r.getResponse().getContentAsString();
+      if (body.contains("\"emailOtpSent\":true")) return body;
+      Thread.sleep(100);
+    }
+    fail("the email OTP was not sent within 10 s of AUTO_VERIFIED");
+    return null;
   }
 
   @Test void fullJourneyActivatesTheAccount() throws Exception {
@@ -95,6 +119,7 @@ class RegistrationVerificationFlowTest {
     String token = register("full", email);
     String status = waitForOcr(token);
     assertTrue(status.contains("\"ocrStatus\":\"AUTO_VERIFIED\""), "fake OCR must auto-verify; status was " + status);
+    status = waitForEmailOtpSent(token);
     assertTrue(status.contains("\"emailOtpSent\":true"), "the email OTP must have been sent; status was " + status);
 
     String code = emailCode(email);
