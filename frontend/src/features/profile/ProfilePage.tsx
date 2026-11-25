@@ -1,24 +1,25 @@
-import { useEffect, useState } from 'react'; import { useParams, Link, useNavigate } from 'react-router-dom'; import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react'; import { useParams, Link, useNavigate } from 'react-router-dom'; import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiDelete, errorMessage } from '../../api/client'; import { Skeleton, ErrorState, ApiUnavailable, Button, Modal } from '../../design/primitives';
 import { useAuth } from '../../app/auth';
-import RepoViewer, { LiveRepoViewer, slugify, repoStats } from '../workspace/RepoViewer';
 import { parseLinks } from './links';
-import type { UserProfile, ProjectItem, EducationItem, AchievementItem } from '../../api/types';
+import type { UserProfile } from '../../api/types';
 /** Profile reads use /api/profiles/… (GET /profiles/me, GET /profiles/{id}),
  *  follow is POST/DELETE /profiles/{id}/follow, activity is
- *  GET /profiles/{id}/activity, and the portfolio lists come from
- *  GET /profiles/{id}/projects|education|achievements.
+ *  GET /profiles/{id}/activity-items.
  *  Layout (owner reference, 2026-11-21): warm cover banner with an
  *  overlapping avatar, name + "✓ Verified student", headline, academic
- *  line; below, a two-column body — About Me / Skills / Pinned
- *  Projects / Activity on the left, Education / Links / Achievements
- *  on the right. The page is a READ-ONLY showcase (owner instruction
- *  2026-11-21): all editing lives in Settings → Edit Profile. Every
- *  value shown comes from the profile DTO and its lists; fields the
- *  API does not carry (repository language/stars/forks, location)
- *  are not shown. */
+ *  line; below, a two-column body — About Me / Skills / Activity on the
+ *  left, Links on the right. The page is a READ-ONLY showcase (owner
+ *  instruction 2026-11-21): all editing lives in Settings → Edit Profile.
+ *  D-202: the Education, Pinned Projects and Achievements sections were
+ *  removed from this page (the portfolio manager in Settings and its
+ *  endpoints are untouched). The uploaded cover is rendered from
+ *  GET /profiles/{id}/cover, falling back to the solid banner. Every
+ *  value shown comes from the profile DTO; fields the API does not carry
+ *  (repository language/stars/forks, location) are not shown. */
 const PF_CSS = `
 .pf-cover{height:148px;background:#E8E0C8;border-radius:var(--radius-md) var(--radius-md) 0 0}
+.pf-cover-img{display:block;width:100%;height:148px;object-fit:cover;border-radius:var(--radius-md) var(--radius-md) 0 0}
 [data-theme="dark"] .pf-cover{background:#38331F}
 .pf-head{display:flex;gap:16px;align-items:flex-start;padding:0 20px}
 .pf-avatar{width:92px;height:92px;border-radius:50%;background:var(--primary);color:var(--on-primary);display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:1.5rem;border:4px solid var(--background);box-sizing:content-box;margin-top:-46px;flex:none}
@@ -54,33 +55,24 @@ const PF_CSS = `
 `;
 function initialsOf(name: string){ const p=name.trim().split(/\s+/).filter(Boolean); return p.length? (p[0][0]+(p.length>1?p[p.length-1][0]:'')).toUpperCase() : '?'; }
 
-function usePortfolio(userId: string|number|undefined){
-  const projects = useQuery({ queryKey:['projects',userId], queryFn: ()=>apiGet<ProjectItem[]>(`/profiles/${userId}/projects`), retry:false, enabled: userId!=null });
-  const education = useQuery({ queryKey:['education',userId], queryFn: ()=>apiGet<EducationItem[]>(`/profiles/${userId}/education`), retry:false, enabled: userId!=null });
-  const achievements = useQuery({ queryKey:['achievements',userId], queryFn: ()=>apiGet<AchievementItem[]>(`/profiles/${userId}/achievements`), retry:false, enabled: userId!=null });
-  return { projects, education, achievements };
-}
-
 export default function ProfilePage(){ const {id}=useParams(); const isMe = id==='me';
   const nav = useNavigate(); const { setUser } = useAuth();
-  const [openProject, setOpenProject] = useState<ProjectItem | null>(null);
   const [signOutOpen, setSignOutOpen] = useState(false);
-  useEffect(() => { if (!openProject) return; const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenProject(null); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [openProject ]);
   // Mirrors the header menu's sign-out: the server session is ended,
   // local state is cleared either way, and the student lands on /login.
   const doSignOut = async () => { try { await apiPost('/auth/logout'); } catch { /* local sign-out still proceeds */ } setUser(null); setSignOutOpen(false); nav('/login'); };
   const qc=useQueryClient();
   const [photoOk,setPhotoOk]=useState(true);
+  const [coverOk,setCoverOk]=useState(true);
   const q = useQuery({ queryKey:['user',id], queryFn: ()=>apiGet<UserProfile>(isMe?'/profiles/me':`/profiles/${id}`), retry:false });
   const uid = isMe ? (q.data?.userId ?? q.data?.id) : id;
   const activity = useQuery({ queryKey:['user-activity-items',id], queryFn: ()=>apiGet<any[]>(isMe?'/profiles/me/activity-items':`/profiles/${id}/activity-items`), retry:false, enabled: !!uid });
   const follow = useMutation({ mutationFn: ()=>apiPost(`/profiles/${id}/follow`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['user',id]}) });
   const unfollow = useMutation({ mutationFn: ()=>apiDelete(`/profiles/${id}/follow`), onSuccess: ()=>qc.invalidateQueries({queryKey:['user',id]}) });
-  const pf = usePortfolio(uid);
   const u = q.data||{} as UserProfile;
   const skills = [...new Set([...(u.skills||[]), ...(u.sectors||[])])];
   return <div className="container"><style>{PF_CSS}</style>{q.isPending?<Skeleton/>:q.isError?(q.error as any)?.status===404?<ApiUnavailable endpoint={isMe?'/profiles/me':`/profiles/${id}`} onRetry={()=>q.refetch()}/>:<ErrorState message={errorMessage(q.error)} onRetry={()=>q.refetch()}/>:<>
-  <div className="pf-cover" aria-hidden="true" />
+  {uid!=null && u.hasCover && coverOk ? <img className="pf-cover-img" src={`/api/profiles/${uid}/cover`} alt="" onError={()=>setCoverOk(false)} /> : <div className="pf-cover" aria-hidden="true" />}
   <div className="pf-head">
     {uid!=null && photoOk ? <img className="pf-photo" src={`/api/profiles/${uid}/photo`} alt="" onError={()=>setPhotoOk(false)} /> : <span className="pf-avatar" aria-hidden="true">{initialsOf(u.fullName||'?')}</span>}
     <div className="pf-head-main">
@@ -98,9 +90,6 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
     <div>
       <section className="pf-card"><h2>About Me</h2>{u.bio ? <p style={{margin:0}}>{u.bio}</p> : <p className="secondary" style={{margin:0}}>{isMe?'Add a short bio with Edit Profile.':'No bio yet.'}</p>}</section>
       <section className="pf-card"><h2>Skills</h2>{skills.length===0 ? <p className="secondary" style={{margin:0}}>No skills listed yet.</p> : <div className="pf-pills">{skills.map(s=><span key={s} className="pill">{s}</span>)}</div>}</section>
-      <section className="pf-card"><h2>Pinned Projects</h2>
-        {pf.projects.isPending?<Skeleton/>:pf.projects.isError?<ErrorState message={errorMessage(pf.projects.error)}/>:((pf.projects.data||[]).length===0?<p className="secondary" style={{margin:0}}>No projects yet.</p>:(pf.projects.data||[]).map(p=><button key={p.id} type="button" className="pf-proj pf-proj-btn" onClick={()=>setOpenProject(p)}><span className="pf-proj-top"><strong>{p.title}</strong><span className="pf-public">Public</span></span>{p.description && <p>{p.description}</p>}{p.url && <p>{p.url}</p>}<span className="pf-proj-open">View repository →</span></button>))}
-      </section>
       <section className="pf-card"><h2>Activity</h2>
         {activity.isPending?<Skeleton/>:activity.isError?<ErrorState message={errorMessage(activity.error)} onRetry={()=>activity.refetch()}/>:(()=>{
           // Unified activity from the API: posts, comments and
@@ -120,9 +109,6 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
       </section>
     </div>
     <div>
-      <section className="pf-card"><h2>Education</h2>
-        {pf.education.isPending?<Skeleton/>:pf.education.isError?<ErrorState message={errorMessage(pf.education.error)}/>:((pf.education.data||[]).length===0?<p className="secondary" style={{margin:0}}>No education entries yet.</p>:(pf.education.data||[]).map(e=><div key={e.id} className="pf-row"><strong>{e.degree||''}</strong><p>{[e.institution, e.year].filter(Boolean).join(' · ')}</p></div>))}
-      </section>
       <section className="pf-card"><h2>Links</h2>
         {(() => { const L = parseLinks(u.links); const rows: [string, string][] = [];
           if (L.github) rows.push(['GitHub', L.github]); if (L.portfolio) rows.push(['Portfolio', L.portfolio]); if (L.linkedin) rows.push(['LinkedIn', L.linkedin]);
@@ -132,20 +118,9 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
         })()}
         <p style={{margin:0}}><Link to="/workspace">GitHub — connect in Workspace →</Link></p>
       </section>
-      <section className="pf-card"><h2>Achievements</h2>
-        {pf.achievements.isPending?<Skeleton/>:pf.achievements.isError?<ErrorState message={errorMessage(pf.achievements.error)}/>:((pf.achievements.data||[]).length===0?<p className="secondary" style={{margin:0}}>No achievements yet.</p>:(pf.achievements.data||[]).map(a=><div key={a.id} className="pf-row"><strong>{a.title}</strong><p>{[a.description, a.year].filter(Boolean).join(' · ')}</p></div>))}
-      </section>
     </div>
   </div>
   {isMe && <section className="pf-card pf-signout"><div><h2 style={{margin:'0 0 4px'}}>Sign out</h2><p className="secondary" style={{margin:0}}>Sign out of UniLink on this device.</p></div><Button onClick={()=>setSignOutOpen(true)}>Sign out</Button></section>}
-  {openProject && <div className="pf-repo-backdrop" onClick={()=>setOpenProject(null)}>
-    <div className="pf-repo-modal" role="dialog" aria-modal="true" aria-label={`${openProject.title} repository`} onClick={e=>e.stopPropagation()}>
-      <button type="button" className="pf-repo-close" aria-label="Close repository viewer" onClick={()=>setOpenProject(null)}>×</button>
-      {(() => { const gh = (openProject.url || '').match(/github\.com\/([\w.-]+)\/([\w.-]+)/); return gh
-        ? <LiveRepoViewer owner={gh[1]} name={gh[2].replace(/\.git$/, '')} />
-        : <RepoViewer repo={{ owner: slugify(u.fullName||'student'), name: slugify(openProject.title || 'project'), description: openProject.description||'', language: 'TypeScript', ...repoStats(openProject.title || 'project'), ownerName: u.fullName || 'Student', viewerIsOwner: isMe }} />; })()}
-    </div>
-  </div>}
   {signOutOpen && <Modal title="Sign out of UniLink?" onClose={()=>setSignOutOpen(false)}>
     <p>Are you sure you want to sign out? You will need to log in again to access your account.</p>
     <div style={{display:'flex',gap:8,marginTop:14}}><Button onClick={()=>setSignOutOpen(false)}>Cancel</Button><Button variant="primary" onClick={doSignOut}>Sign out</Button></div>

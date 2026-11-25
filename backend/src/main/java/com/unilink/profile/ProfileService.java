@@ -14,8 +14,17 @@ public class ProfileService {
   public record ProfileDto(Long userId, String fullName, String email, String phone, Long universityId, Long departmentId,
                            Long batchId, String studentId, String state, String bio, String headline, String links,
                            List<String> skills, List<String> sectors, long followers, long following, boolean isOwner,
-                           String universityName, String departmentName, String batchLabel) {}
+                           String universityName, String departmentName, String batchLabel,
+                           boolean hasPhoto, boolean hasCover, Boolean phoneVisible) {}
   public record PhotoFile(byte[] bytes, String contentType) {}
+  /** D-202: PATCH field-presence carrier — absent = untouched, explicit
+   *  null = clear. (A plain record cannot tell absent from null, so the
+   *  controller builds this from the raw JSON node.) */
+  public record PatchUpdate(boolean bioPresent, String bio, boolean headlinePresent, String headline,
+                            boolean linksPresent, String links, boolean phoneVisiblePresent, Boolean phoneVisible) {}
+  /** Bangladeshi mobile: 11 digits, 01[3-9]xxxxxxxx (FR-AUTH-02; +880 form
+   *  is not accepted) — same pattern as registration (AuthDtos). */
+  public static final java.util.regex.Pattern BD_PHONE = java.util.regex.Pattern.compile("^01[3-9]\\d{8}$");
   private final UserRepository users; private final ProfileRepository profiles; private final ProjectRepository projects;
   private final EducationEntryRepository education; private final AchievementRepository achievements;
   private final UserSkillRepository userSkills; private final SkillRepository skills; private final FollowRepository follows;
@@ -26,20 +35,21 @@ public class ProfileService {
   private final StorageGateway storage; private final UploadValidator uploads;
   private final CommentRepository profileComments; private final ReactionRepository profileReactions;
   private final com.unilink.notification.NotificationService profileNotifications;
+  private final com.unilink.identity.service.OtpService otp;
   public ProfileService(UserRepository users, ProfileRepository profiles, ProjectRepository projects,
       EducationEntryRepository education, AchievementRepository achievements, UserSkillRepository userSkills,
       SkillRepository skills, FollowRepository follows, UserSectorFollowRepository sectorFollows,
       SectorTagRepository sectors, IdentityChangeRequestRepository changeRequests, AccessPolicy policy,
       PostRepository posts, FeedService feed,
       UniversityRepository universities, DepartmentRepository departments, BatchRepository batches,
-      StorageGateway storage, UploadValidator uploads, CommentRepository profileComments, ReactionRepository profileReactions, com.unilink.notification.NotificationService profileNotifications){
+      StorageGateway storage, UploadValidator uploads, CommentRepository profileComments, ReactionRepository profileReactions, com.unilink.notification.NotificationService profileNotifications, com.unilink.identity.service.OtpService otp){
     this.profileComments=profileComments; this.profileReactions=profileReactions; this.profileNotifications=profileNotifications;
     this.users=users; this.profiles=profiles; this.projects=projects; this.education=education; this.achievements=achievements;
     this.userSkills=userSkills; this.skills=skills; this.follows=follows; this.sectorFollows=sectorFollows;
     this.sectors=sectors; this.changeRequests=changeRequests; this.policy=policy;
     this.posts=posts; this.feed=feed;
     this.universities=universities; this.departments=departments; this.batches=batches;
-    this.storage=storage; this.uploads=uploads;
+    this.storage=storage; this.uploads=uploads; this.otp=otp;
   }
   @Transactional(readOnly=true)
   public ProfileDto getProfile(Long targetUserId, Principals.UnilinkUserPrincipal viewer){
@@ -59,16 +69,87 @@ public class ProfileService {
       u.getUniversityId()==null?null:universities.findById(u.getUniversityId()).map(University::getName).orElse(null),
       // D-193/D-194: the free-text label wins; the legacy row is the fallback.
       u.getDepartmentLabel()!=null?u.getDepartmentLabel():(u.getDepartmentId()==null?null:departments.findById(u.getDepartmentId()).map(Department::getName).orElse(null)),
-      u.getBatchLabel()!=null?u.getBatchLabel():(u.getBatchId()==null?null:batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null)));
+      u.getBatchLabel()!=null?u.getBatchLabel():(u.getBatchId()==null?null:batches.findById(u.getBatchId()).map(Batch::getLabel).orElse(null)),
+      // D-202: hasPhoto/hasCover let the UI render thumbnails and the cover
+      // (and cache-bust them) without probing the image endpoints.
+      u.getProfilePhotoKey()!=null, p!=null && p.getCoverKey()!=null,
+      // The privacy setting itself is the owner's business only: a
+      // non-owner sees null, never the stored value.
+      owner ? (p==null ? false : p.getPhoneVisible()) : null);
   }
   @Transactional
-  public ProfileDto updateOwn(Long userId, String bio, String headline, String links, Boolean phoneVisible){
+  public ProfileDto updateOwn(Long userId, String bio, String headline, String links, Boolean phoneVisible, Principals.UnilinkUserPrincipal viewer){
     Profile p = profiles.findById(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
     if (bio!=null) p.setBio(bio); if (headline!=null) p.setHeadline(headline);
     if (links!=null){ if (links.contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)"); p.setLinks(links); }
     if (phoneVisible!=null) p.setPhoneVisible(phoneVisible);
     profiles.save(p);
-    return getProfile(userId, null);
+    // D-202: the response uses the real viewer — the old getProfile(userId,
+    // null) reported isOwner=false and redacted the owner's own phone.
+    return getProfile(userId, viewer);
+  }
+  /** D-202: true PATCH — absent fields are untouched, an explicit null
+   *  clears the field (bio/headline/links to null; phoneVisible to false,
+   *  its NOT NULL default). The javascript: link guard is reused. */
+  @Transactional
+  public ProfileDto patchOwn(Long userId, PatchUpdate patch, Principals.UnilinkUserPrincipal viewer){
+    Profile p = profiles.findById(userId).orElseGet(() -> { Profile np=new Profile(); np.setId(userId); return np; });
+    if (patch.bioPresent()) p.setBio(patch.bio());
+    if (patch.headlinePresent()) p.setHeadline(patch.headline());
+    if (patch.linksPresent()){
+      if (patch.links()!=null && patch.links().contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)");
+      p.setLinks(patch.links());
+    }
+    if (patch.phoneVisiblePresent()) p.setPhoneVisible(patch.phoneVisible()!=null && patch.phoneVisible());
+    profiles.save(p);
+    return getProfile(userId, viewer);
+  }
+  // ---- phone change (D-199): two-step, OTP re-verification of the NEW
+  // number before it takes effect; the old verified number stays until then. ----
+  @Transactional
+  public void requestPhoneChange(Long userId, String newPhone, String ip){
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    if (newPhone==null || !BD_PHONE.matcher(newPhone).matches())
+      throw new Exceptions.BadRequest("INVALID_PHONE","Phone must be a Bangladeshi mobile number, e.g. 01712345678");
+    if (newPhone.equals(u.getPhone()))
+      throw new Exceptions.BadRequest("PHONE_UNCHANGED","This is already your phone number");
+    // D-077 (as at registration): a number attached to a suspended or
+    // banned account cannot be taken over. Other duplicates stay soft.
+    boolean phoneBlocked = users.findByPhone(newPhone).stream()
+      .anyMatch(other -> "SUSPENDED".equals(other.getState()) || "BANNED".equals(other.getState()));
+    if (phoneBlocked) throw new Exceptions.Forbidden("This phone number is attached to a suspended or banned account");
+    u.setPendingPhone(newPhone);
+    u.setPendingPhoneRequestedAt(LocalDateTime.now());
+    users.save(u);
+    // SMS-only OTP (D-199): throws 503 SMS_NOT_CONFIGURED when no gateway
+    // is configured, or 429 on the resend caps — either rolls this whole
+    // transaction back, so no pending change is left behind.
+    otp.sendPhoneOtpTo(u, newPhone, ip);
+  }
+  /** Verifies the pending change: succeeds only against the newest unused
+   *  OTP issued for the pending number; in one transaction the phone swaps,
+   *  phoneVerifiedAt is set to now, the pending fields clear and the OTP is
+   *  marked used. Any failure leaves the old phone untouched. */
+  @Transactional
+  public String verifyPhoneChange(Long userId, String otpCode){
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    if (u.getPendingPhone()==null)
+      throw new Exceptions.BadRequest("NO_PENDING_PHONE_CHANGE","No phone change is waiting for verification. Request one first.");
+    otp.verifyPhoneOtpFor(u, u.getPendingPhone(), otpCode);
+    String swapped = u.getPendingPhone();
+    u.setPhone(swapped);
+    u.setPhoneVerifiedAt(LocalDateTime.now());
+    u.setPendingPhone(null);
+    u.setPendingPhoneRequestedAt(null);
+    users.save(u);
+    return swapped;
+  }
+  @Transactional
+  public void cancelPhoneChange(Long userId){
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    u.setPendingPhone(null);
+    u.setPendingPhoneRequestedAt(null);
+    users.save(u);
   }
   @Transactional public ProfileDtos.ProjectDto addProject(Long userId, String title, String desc, String url){
     if (url!=null && url.toLowerCase().contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)");
@@ -225,6 +306,24 @@ public class ProfileService {
     String key = storage.store("profile-covers", UploadValidator.sanitizeFileName(fileName), sniffed, stored);
     if (p.getCoverKey()!=null) storage.delete(p.getCoverKey());
     p.setCoverKey(key); profiles.save(p);
+  }
+  @Transactional
+  public void deletePhoto(Long userId){
+    User u = users.findById(userId).orElseThrow(() -> new Exceptions.NotFound("User"));
+    if (u.getProfilePhotoKey()==null) return;
+    String key = u.getProfilePhotoKey();
+    // Delete the stored object first: if that fails the key stays and the
+    // user can retry, instead of a dangling key pointing at a deleted file.
+    storage.delete(key);
+    u.setProfilePhotoKey(null); users.save(u);
+  }
+  @Transactional
+  public void deleteCover(Long userId){
+    Profile p = profiles.findById(userId).orElse(null);
+    if (p==null || p.getCoverKey()==null) return;
+    String key = p.getCoverKey();
+    storage.delete(key);
+    p.setCoverKey(null); profiles.save(p);
   }
   @Transactional(readOnly=true)
   public PhotoFile openPhoto(Long userId){

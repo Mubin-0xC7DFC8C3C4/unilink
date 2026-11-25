@@ -22,10 +22,15 @@ export function parseLinks(raw?: string | null): ParsedLinks {
   return out;
 }
 
-export function composeLinks(l: { github: string; portfolio: string; linkedin: string }): string {
+export function composeLinks(l: { github: string; portfolio: string; linkedin: string; other?: string[] }): string {
+  // D-202: unlabelled legacy lines round-trip verbatim — the old version
+  // emitted only the three labelled lines, silently dropping them on
+  // every save. Lines that would parse back as a labelled URL are kept
+  // out of `other` by parseLinks, so this cannot duplicate a field.
   return [
     l.github.trim() && `GitHub: ${l.github.trim()}`,
     l.portfolio.trim() && `Portfolio: ${l.portfolio.trim()}`,
     l.linkedin.trim() && `LinkedIn: ${l.linkedin.trim()}`,
+    ...(l.other || []).map((o) => o.trim()).filter(Boolean),
   ].filter(Boolean).join('\n');
 }

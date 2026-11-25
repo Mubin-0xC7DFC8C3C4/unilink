@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'; import { useNavigate } from 'react-router-dom'; import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'; import { apiGet, apiPost, apiPut, apiDelete, api, errorMessage } from '../../api/client';
+import { useEffect, useState } from 'react'; import { useNavigate } from 'react-router-dom'; import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'; import { apiGet, apiPost, apiPatch, apiDelete, api, errorMessage } from '../../api/client';
 import { Button, Field, Input } from '../../design/primitives'; import { useTheme } from '../../app/ThemeContext'; import { useAuth } from '../../app/auth'; import { NOTIFICATION_TYPES } from '../../api/types';
+import { ApiError } from '../../api/types';
 import type { UserProfile, ProjectItem, EducationItem, AchievementItem } from '../../api/types';
 import { IconX } from '../../design/icons';
 import { parseLinks, composeLinks } from '../profile/links';
@@ -88,13 +89,15 @@ function PortfolioManager() {
  * replacing the standalone Settings page). The first tab is
  * Edit Profile: photos, headline/bio/phone, skills, links and the
  * portfolio manager, all over the real profile endpoints
- * (PUT /profiles/me, photo/cover uploads, POST/DELETE
+ * (PATCH /profiles/me, photo/cover uploads + deletes, POST/DELETE
  * /profiles/me/skills with the /public/skills catalogue,
- * /profiles/me/{projects|education|achievements}). Phone is shown
- * read-only: no endpoint changes a verified phone number. The
- * change-password and delete-account functions live under Behavior
- * (the owner's tab list has no Security tab) so a must-change login
- * still has a working path.
+ * /profiles/me/{projects|education|achievements}). The phone number
+ * changes through its own two-step flow (D-199): request a change,
+ * then verify the NEW number with a 6-digit SMS code before it takes
+ * effect — the old number stays in use until then, and the flow is
+ * kept out of the generic Save. The change-password and delete-account
+ * functions live under Behavior (the owner's tab list has no Security
+ * tab) so a must-change login still has a working path.
  */
 export default function SettingsModal({ open, initialTab, onClose }: { open: boolean; initialTab: SettingsTab; onClose: () => void }) {
   const { theme, toggle } = useTheme(); const { setUser, user } = useAuth(); const nav = useNavigate(); const qc = useQueryClient();
@@ -103,10 +106,26 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
   const catalogueQ = useQuery({ queryKey: ['skill-catalogue'], queryFn: () => apiGet<{ id: number; name: string }[]>('/public/skills'), retry: false, enabled: open });
   const [bio, setBio] = useState(''); const [headline, setHeadline] = useState('');
   const [gh, setGh] = useState(''); const [pf, setPf] = useState(''); const [li, setLi] = useState('');
+  const [otherLinks, setOtherLinks] = useState<string[]>([]);
+  // D-202: the seeded snapshot — saves PATCH only the fields that differ
+  // from it, and the Save buttons stay disabled until the profile loads,
+  // so a Save can never overwrite stored values with empty defaults.
+  const [seeded, setSeeded] = useState({ bio: '', headline: '', gh: '', pf: '', li: '', other: [] as string[], phoneVisible: false });
   const [phoneVisible, setPhoneVisible] = useState(false); const [showDelete, setShowDelete] = useState(false); const [pw, setPw] = useState(''); const [msg, setMsg] = useState('');
   const [newSkill, setNewSkill] = useState('');
-  const saveProfile = useMutation({ mutationFn: () => apiPut('/profiles/me', { bio, headline, links: composeLinks({ github: gh, portfolio: pf, linkedin: li }) }), onSuccess: () => { setMsg('Profile saved.'); qc.invalidateQueries({ queryKey: ['my-profile'] }); qc.invalidateQueries({ queryKey: ['user'] }); } });
-  const savePrivacy = useMutation({ mutationFn: () => apiPut('/profiles/me', { phoneVisible }), onSuccess: () => setMsg('Privacy saved.') });
+  const saveProfile = useMutation({ mutationFn: () => {
+    const patch: Record<string, unknown> = {};
+    if (bio !== seeded.bio) patch.bio = bio;
+    if (headline !== seeded.headline) patch.headline = headline;
+    const links = composeLinks({ github: gh, portfolio: pf, linkedin: li, other: otherLinks });
+    if (links !== composeLinks({ github: seeded.gh, portfolio: seeded.pf, linkedin: seeded.li, other: seeded.other })) patch.links = links;
+    if (Object.keys(patch).length === 0) return Promise.resolve(null);
+    return apiPatch('/profiles/me', patch);
+  }, onSuccess: (r) => { setMsg(r ? 'Profile saved.' : 'Nothing to save.'); qc.invalidateQueries({ queryKey: ['my-profile'] }); qc.invalidateQueries({ queryKey: ['user'] }); } });
+  const savePrivacy = useMutation({ mutationFn: () => {
+    if (phoneVisible === seeded.phoneVisible) return Promise.resolve(null);
+    return apiPatch('/profiles/me', { phoneVisible });
+  }, onSuccess: (r) => setMsg(r ? 'Privacy saved.' : 'Nothing to save.') });
   const addSkill = useMutation({ mutationFn: (name: string) => apiPost('/profiles/me/skills', { name }), onSuccess: () => { setNewSkill(''); qc.invalidateQueries({ queryKey: ['my-profile'] }); qc.invalidateQueries({ queryKey: ['skill-catalogue'] }); } });
   const removeSkill = useMutation({ mutationFn: (name: string) => {
     const entry = (catalogueQ.data || []).find((s) => s.name.toLowerCase() === name.toLowerCase());
@@ -117,8 +136,33 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
   const changePw = useMutation({ mutationFn: () => apiPost('/auth/change-password', { oldPassword: oldPw, newPassword: newPw }), onSuccess: () => { setUser(null); onClose(); nav('/login'); } });
   const del = useMutation({ mutationFn: () => apiPost('/me/delete', { password: pw }), onSuccess: () => { setUser(null); onClose(); nav('/login'); } });
   const [photo, setPhoto] = useState<File | null>(null); const [cover, setCover] = useState<File | null>(null);
-  const uploadPhoto = useMutation({ mutationFn: () => { const fd = new FormData(); fd.append('file', photo!); return api('/profiles/me/photo', { method: 'PUT', body: fd }); }, onSuccess: () => { setPhoto(null); setMsg('Profile photo uploaded.'); } });
-  const uploadCover = useMutation({ mutationFn: () => { const fd = new FormData(); fd.append('file', cover!); return api('/profiles/me/cover', { method: 'PUT', body: fd }); }, onSuccess: () => { setCover(null); setMsg('Cover photo uploaded.'); } });
+  // D-202: cache-buster for the photo/cover thumbnails — the image
+  // endpoints send Cache-Control: private, max-age=3600, so a fresh
+  // upload would otherwise stay hidden behind the cached old image.
+  const [cacheBuster, setCacheBuster] = useState(0);
+  const [photoOk, setPhotoOk] = useState(true); const [coverOk, setCoverOk] = useState(true);
+  const refreshProfile = () => { qc.invalidateQueries({ queryKey: ['my-profile'] }); qc.invalidateQueries({ queryKey: ['user'] }); setCacheBuster((n) => n + 1); };
+  const uploadPhoto = useMutation({ mutationFn: () => { const fd = new FormData(); fd.append('file', photo!); return api('/profiles/me/photo', { method: 'PUT', body: fd }); }, onSuccess: () => { setPhoto(null); setPhotoOk(true); setMsg('Profile photo uploaded.'); refreshProfile(); } });
+  const uploadCover = useMutation({ mutationFn: () => { const fd = new FormData(); fd.append('file', cover!); return api('/profiles/me/cover', { method: 'PUT', body: fd }); }, onSuccess: () => { setCover(null); setCoverOk(true); setMsg('Cover photo uploaded.'); refreshProfile(); } });
+  const deletePhoto = useMutation({ mutationFn: () => apiDelete('/profiles/me/photo'), onSuccess: () => { setPhotoOk(true); setMsg('Profile photo removed.'); refreshProfile(); } });
+  const deleteCover = useMutation({ mutationFn: () => apiDelete('/profiles/me/cover'), onSuccess: () => { setCoverOk(true); setMsg('Cover photo removed.'); refreshProfile(); } });
+  // ---- phone change (D-199): kept out of the generic Save. The old
+  // number (profileQ.data.phone) stays shown until the new one verifies. ----
+  const [phoneStep, setPhoneStep] = useState<'idle' | 'otp'>('idle');
+  const [newPhone, setNewPhone] = useState(''); const [otpCode, setOtpCode] = useState('');
+  const [phoneErr, setPhoneErr] = useState(''); const [resendIn, setResendIn] = useState(0);
+  const phoneChangeError = (e: unknown) => (e instanceof ApiError && e.code === 'SMS_NOT_CONFIGURED')
+    ? 'Phone change by SMS is not available yet — no SMS gateway is configured. Your current number is unchanged.'
+    : errorMessage(e);
+  const requestPhoneChange = useMutation({ mutationFn: () => apiPost('/profiles/me/phone-change', { newPhone }), onSuccess: () => { setPhoneStep('otp'); setResendIn(60); setPhoneErr(''); }, onError: (e) => setPhoneErr(phoneChangeError(e)) });
+  const resendPhoneChange = useMutation({ mutationFn: () => apiPost('/profiles/me/phone-change', { newPhone }), onSuccess: () => { setResendIn(60); setPhoneErr(''); }, onError: (e) => setPhoneErr(phoneChangeError(e)) });
+  const verifyPhoneChange = useMutation({ mutationFn: () => apiPost<{ phone?: string }>('/profiles/me/phone-change/verify', { otp: otpCode }), onSuccess: () => { setPhoneStep('idle'); setNewPhone(''); setOtpCode(''); setPhoneErr(''); setMsg('Phone number changed.'); refreshProfile(); }, onError: (e) => setPhoneErr(phoneChangeError(e)) });
+  const cancelPhoneChange = useMutation({ mutationFn: () => apiPost('/profiles/me/phone-change/cancel'), onSuccess: () => { setPhoneStep('idle'); setNewPhone(''); setOtpCode(''); setPhoneErr(''); }, onError: (e) => setPhoneErr(phoneChangeError(e)) });
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
   const [prefsState, setPrefsState] = useState<PrefState>(defaultPrefs);
   const [prefResults, setPrefResults] = useState<{ type: string; ok: boolean }[] | null>(null);
   const [prefSaved, setPrefSaved] = useState(false);
@@ -127,12 +171,17 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
     return NOTIFICATION_TYPES.map((type, i) => ({ type, ok: settled[i].status === 'fulfilled' }));
   }, onSuccess: (r) => { setPrefResults(r); setPrefSaved(r.every((x) => x.ok)); } });
 
-  useEffect(() => { if (open) { setTab(initialTab); setMsg(''); setShowDelete(false); } }, [open, initialTab]);
+  useEffect(() => { if (open) { setTab(initialTab); setMsg(''); setShowDelete(false); setPhoneStep('idle'); setNewPhone(''); setOtpCode(''); setPhoneErr(''); } }, [open, initialTab]);
   useEffect(() => {
     if (!profileQ.data) return;
     setBio(profileQ.data.bio || ''); setHeadline(profileQ.data.headline || '');
     const parsed = parseLinks(profileQ.data.links);
-    setGh(parsed.github); setPf(parsed.portfolio); setLi(parsed.linkedin);
+    setGh(parsed.github); setPf(parsed.portfolio); setLi(parsed.linkedin); setOtherLinks(parsed.other);
+    // D-202: phoneVisible is seeded from the profile like every other
+    // field — it used to start false and never update, so opening Privacy
+    // and saving silently turned phone visibility off.
+    setPhoneVisible(profileQ.data.phoneVisible ?? false);
+    setSeeded({ bio: profileQ.data.bio || '', headline: profileQ.data.headline || '', gh: parsed.github, pf: parsed.portfolio, li: parsed.linkedin, other: parsed.other, phoneVisible: profileQ.data.phoneVisible ?? false });
   }, [profileQ.data]);
   useEffect(() => {
     if (!open) return;
@@ -158,6 +207,15 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
               <div className="sm-section">
                 <h3 className="title">Photos</h3>
                 <p className="secondary">Add a profile photo and a cover banner — both are optional, and you can change them any time.</p>
+                {(() => {
+                  const uid = profileQ.data?.userId ?? profileQ.data?.id;
+                  if (uid == null) return null;
+                  return <>
+                    {profileQ.data?.hasPhoto && photoOk && <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><img src={`/api/profiles/${uid}/photo?v=${cacheBuster}`} alt="Current profile photo" onError={() => setPhotoOk(false)} style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover' }} /><span className="secondary">Current profile photo</span><Button onClick={() => deletePhoto.mutate()} disabled={deletePhoto.isPending}>Remove</Button></div>}
+                    {profileQ.data?.hasCover && coverOk && <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><img src={`/api/profiles/${uid}/cover?v=${cacheBuster}`} alt="Current cover photo" onError={() => setCoverOk(false)} style={{ width: 112, height: 56, borderRadius: 6, objectFit: 'cover' }} /><span className="secondary">Current cover photo</span><Button onClick={() => deleteCover.mutate()} disabled={deleteCover.isPending}>Remove</Button></div>}
+                    {(deletePhoto.isError || deleteCover.isError) && <p role="alert" className="field-error">{errorMessage(deletePhoto.error || deleteCover.error)}</p>}
+                  </>;
+                })()}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}><input aria-label="Profile photo" type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] || null)} /><Button onClick={() => photo && uploadPhoto.mutate()} disabled={!photo || uploadPhoto.isPending}>Upload photo</Button></div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input aria-label="Cover photo" type="file" accept="image/*" onChange={(e) => setCover(e.target.files?.[0] || null)} /><Button onClick={() => cover && uploadCover.mutate()} disabled={!cover || uploadCover.isPending}>Upload cover</Button></div>
                 {(uploadPhoto.isError || uploadCover.isError) && <p role="alert" className="field-error">{errorMessage(uploadPhoto.error || uploadCover.error)}</p>}
@@ -166,8 +224,23 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
                 <h3 className="title">Basic info</h3>
                 <Field label="Headline" htmlFor="s-headline"><Input id="s-headline" value={headline} onChange={(e) => setHeadline(e.target.value)} /></Field>
                 <Field label="Bio" htmlFor="s-bio"><Input id="s-bio" value={bio} onChange={(e) => setBio(e.target.value)} /></Field>
-                <Field label="Phone number" htmlFor="s-phone"><Input id="s-phone" value={profileQ.data?.phone || ''} disabled readOnly /></Field>
-                <p className="secondary">Your phone number was verified at sign-up and can't be changed here.</p>
+              </div>
+              <div className="sm-section">
+                <h3 className="title">Phone number</h3>
+                <p className="secondary">Current number: {profileQ.data?.phone || '—'}. To change it, we send a 6-digit code to the new number — your current number stays in use until the new one verifies.</p>
+                {phoneStep === 'idle' ? <>
+                  <Field label="New phone number" htmlFor="s-new-phone"><Input id="s-new-phone" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder="01712345678" inputMode="tel" /></Field>
+                  <Button variant="primary" onClick={() => requestPhoneChange.mutate()} disabled={!/^01[3-9]\d{8}$/.test(newPhone.trim()) || newPhone.trim() === (profileQ.data?.phone || '') || requestPhoneChange.isPending || profileQ.isPending}>Send verification code</Button>
+                </> : <>
+                  <p className="secondary">We sent a 6-digit code to {newPhone}. Your current number {profileQ.data?.phone || '—'} stays in use until this verifies.</p>
+                  <Field label="Verification code" htmlFor="s-phone-otp"><Input id="s-phone-otp" value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="123456" inputMode="numeric" /></Field>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <Button variant="primary" onClick={() => verifyPhoneChange.mutate()} disabled={otpCode.trim().length !== 6 || verifyPhoneChange.isPending}>Verify and change number</Button>
+                    <Button onClick={() => resendPhoneChange.mutate()} disabled={resendIn > 0 || resendPhoneChange.isPending}>{resendIn > 0 ? `Resend code (${resendIn}s)` : 'Resend code'}</Button>
+                    <Button onClick={() => cancelPhoneChange.mutate()} disabled={cancelPhoneChange.isPending}>Cancel</Button>
+                  </div>
+                </>}
+                {phoneErr && <p role="alert" className="field-error">{phoneErr}</p>}
               </div>
               <div className="sm-section">
                 <h3 className="title">Skills</h3>
@@ -183,7 +256,7 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
                 <Field label="GitHub URL" htmlFor="s-gh"><Input id="s-gh" value={gh} onChange={(e) => setGh(e.target.value)} placeholder="https://github.com/you" /></Field>
                 <Field label="Portfolio URL" htmlFor="s-pf"><Input id="s-pf" value={pf} onChange={(e) => setPf(e.target.value)} placeholder="https://your-portfolio.example" /></Field>
                 <Field label="LinkedIn URL" htmlFor="s-li"><Input id="s-li" value={li} onChange={(e) => setLi(e.target.value)} placeholder="https://www.linkedin.com/in/you" /></Field>
-                <Button variant="primary" onClick={() => saveProfile.mutate()}>Save profile</Button>
+                <Button variant="primary" onClick={() => saveProfile.mutate()} disabled={profileQ.isPending || saveProfile.isPending}>Save profile</Button>
                 {saveProfile.isError && <p role="alert" className="field-error">{errorMessage(saveProfile.error)}</p>}
               </div>
               <PortfolioManager />
@@ -195,7 +268,7 @@ export default function SettingsModal({ open, initialTab, onClose }: { open: boo
             {tab === 'Privacy' && <>
               <label><input type="checkbox" checked={phoneVisible} onChange={(e) => setPhoneVisible(e.target.checked)} /> Show my phone number</label>
               <p className="secondary">Your address is never shown to other users.</p>
-              <div style={{ marginTop: 8 }}><Button variant="primary" onClick={() => savePrivacy.mutate()}>Save privacy</Button></div>
+              <div style={{ marginTop: 8 }}><Button variant="primary" onClick={() => savePrivacy.mutate()} disabled={profileQ.isPending || savePrivacy.isPending}>Save privacy</Button></div>
               {savePrivacy.isError && <p role="alert" className="field-error">{errorMessage(savePrivacy.error)}</p>}
             </>}
             {tab === 'Notifications' && <>

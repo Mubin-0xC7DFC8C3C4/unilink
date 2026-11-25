@@ -20,6 +20,10 @@ public class User {
   @Column(name="full_name", nullable=false) private String fullName;
   @Column(name="email", nullable=false) private String email;
   @Column(name="phone") private String phone;
+  /** D-199: phone change is two-step — the new number waits here, OTP-verified,
+   *  while the old verified phone stays in force until the swap succeeds. */
+  @Column(name="pending_phone") private String pendingPhone;
+  @Column(name="pending_phone_requested_at") private LocalDateTime pendingPhoneRequestedAt;
   @Column(name="address") private String address;
   @Column(name="student_id") private String studentId;
   @Column(name="state") private String state;

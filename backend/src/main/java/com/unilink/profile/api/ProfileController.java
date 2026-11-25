@@ -1,7 +1,8 @@
 package com.unilink.profile.api;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.unilink.community.FeedService;
 import com.unilink.profile.ProfileDtos; import com.unilink.profile.ProfileService;
-import com.unilink.security.AccessPolicy;
+import com.unilink.security.AccessPolicy; import com.unilink.security.IpResolver;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.security.core.Authentication; import org.springframework.web.bind.annotation.*;
@@ -10,16 +11,50 @@ import java.io.IOException;
 import java.util.*;
 @RestController @RequestMapping("/api/profiles")
 public class ProfileController {
-  private final ProfileService service; private final AccessPolicy policy;
-  public ProfileController(ProfileService s, AccessPolicy p){ service=s; policy=p; }
+  private final ProfileService service; private final AccessPolicy policy; private final IpResolver ipResolver;
+  public ProfileController(ProfileService s, AccessPolicy p, IpResolver ip){ service=s; policy=p; ipResolver=ip; }
   public record UpdateProfile(String bio, String headline, String links, Boolean phoneVisible) {}
   public record TextPayload(String title, String description, String url, String institution, String degree, Integer year) {}
+  public record PhoneChangeRequest(String newPhone) {}
+  public record PhoneChangeVerifyRequest(String otp) {}
   @GetMapping("/me") public ProfileService.ProfileDto me(Authentication a){
     var p = policy.requireStudent(a.getPrincipal()); return service.getProfile(p.userId(), p);
   }
   @PutMapping("/me") public ProfileService.ProfileDto updateMe(Authentication a, @RequestBody UpdateProfile r){
     var p = policy.requireStudent(a.getPrincipal());
-    return service.updateOwn(p.userId(), r.bio(), r.headline(), r.links(), r.phoneVisible());
+    return service.updateOwn(p.userId(), r.bio(), r.headline(), r.links(), r.phoneVisible(), p);
+  }
+  /** D-202: true PATCH — absent = untouched, explicit null = clear.
+   *  Field presence is read off the raw JSON node: a record cannot tell
+   *  an absent field from an explicit null. PUT stays for compatibility. */
+  @PatchMapping("/me") public ProfileService.ProfileDto patchMe(Authentication a, @RequestBody JsonNode body){
+    var p = policy.requireStudent(a.getPrincipal());
+    if (body==null || !body.isObject()) throw new com.unilink.common.Exceptions.BadRequest("INVALID_REQUEST","Request body must be a JSON object");
+    var patch = new ProfileService.PatchUpdate(
+      body.has("bio"), body.has("bio") && !body.get("bio").isNull() ? body.get("bio").asText() : null,
+      body.has("headline"), body.has("headline") && !body.get("headline").isNull() ? body.get("headline").asText() : null,
+      body.has("links"), body.has("links") && !body.get("links").isNull() ? body.get("links").asText() : null,
+      body.has("phoneVisible"), body.has("phoneVisible") && !body.get("phoneVisible").isNull() ? body.get("phoneVisible").asBoolean() : null);
+    return service.patchOwn(p.userId(), patch, p);
+  }
+  // ---- phone change (D-199): two-step, OTP re-verification of the NEW
+  // number. Kept out of the generic profile save: the old verified number
+  // stays in force until the new one verifies. Re-sending is a repeat
+  // POST here with the same newPhone (same caps apply). ----
+  @PostMapping("/me/phone-change") public Map<String,String> requestPhoneChange(Authentication a, @RequestBody PhoneChangeRequest r, jakarta.servlet.http.HttpServletRequest req){
+    var p = policy.requireStudent(a.getPrincipal());
+    service.requestPhoneChange(p.userId(), r.newPhone(), ipResolver.resolve(req));
+    return Map.of("status","OTP_SENT");
+  }
+  @PostMapping("/me/phone-change/verify") public Map<String,String> verifyPhoneChange(Authentication a, @RequestBody PhoneChangeVerifyRequest r){
+    var p = policy.requireStudent(a.getPrincipal());
+    String phone = service.verifyPhoneChange(p.userId(), r.otp());
+    return Map.of("status","verified","phone",phone);
+  }
+  @PostMapping("/me/phone-change/cancel") public Map<String,String> cancelPhoneChange(Authentication a){
+    var p = policy.requireStudent(a.getPrincipal());
+    service.cancelPhoneChange(p.userId());
+    return Map.of("status","cancelled");
   }
   @GetMapping("/{id}") public ProfileService.ProfileDto get(Authentication a, @PathVariable Long id){
     // F7: use requireStudent like every other student controller — an admin
@@ -39,6 +74,19 @@ public class ProfileController {
     var p = policy.requireStudent(a.getPrincipal());
     service.uploadCover(p.userId(), file.getOriginalFilename(), file.getContentType(), file.getBytes());
     return Map.of("status","uploaded");
+  }
+  /** D-202: remove the caller's own photo / cover (key cleared, stored
+   *  object deleted). There is no target id to spoof: /me always resolves
+   *  to the principal. */
+  @DeleteMapping("/me/photo") public Map<String,String> deletePhoto(Authentication a){
+    var p = policy.requireStudent(a.getPrincipal());
+    service.deletePhoto(p.userId());
+    return Map.of("status","deleted");
+  }
+  @DeleteMapping("/me/cover") public Map<String,String> deleteCover(Authentication a){
+    var p = policy.requireStudent(a.getPrincipal());
+    service.deleteCover(p.userId());
+    return Map.of("status","deleted");
   }
   @GetMapping("/{id}/photo") public ResponseEntity<ByteArrayResource> photo(Authentication a, @PathVariable Long id){
     policy.requireStudent(a.getPrincipal());

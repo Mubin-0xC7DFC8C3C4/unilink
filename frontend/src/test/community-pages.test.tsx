@@ -110,16 +110,13 @@ describe('Workspace', () => {
   });
 });
 
-describe('Student Profile — repository modal and sign out', () => {
-  it('opens the repository viewer from a pinned project and signs out through the confirmation popup', async () => {
+describe('Student Profile — sign out (D-202)', () => {
+  it('shows no Pinned Projects section and signs out through the confirmation popup', async () => {
     route = (url, method) => {
       if (url === '/api/auth/me') return json({ id: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED' });
       if (url === '/api/auth/logout' && method === 'POST') return json({});
       if (url === '/api/profiles/me') return json({ userId: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED', departmentName: 'CSE', universityName: 'Metropolitan University', followers: 96, following: 128, skills: [] });
       if (url === '/api/profiles/me/activity-items') return json([]);
-      if (url === '/api/profiles/5/projects') return json([{ id: 1, title: 'Campus Bus Tracker', description: 'Real-time bus tracking.', url: '' }]);
-      if (url === '/api/profiles/5/education') return json([]);
-      if (url === '/api/profiles/5/achievements') return json([]);
       return defaultRoute(url);
     };
     const user = userEvent.setup();
@@ -128,26 +125,16 @@ describe('Student Profile — repository modal and sign out', () => {
       <Route path="/profile/:id" element={<ProfilePage />} />
       <Route path="/login" element={<div>LOGIN PAGE</div>} />
     </Routes></MemoryRouter></AuthProvider></QueryClientProvider>);
-    // Project card opens the repository viewer inside a modal.
-    await user.click(await screen.findByRole('button', { name: /Campus Bus Tracker/ }));
-    const repoDialog = await screen.findByRole('dialog', { name: /repository/ });
-    expect(within(within(repoDialog).getByRole('table')).getByText('package.json')).toBeInTheDocument();
-    expect(within(repoDialog).getByText('Public')).toBeInTheDocument();
-    // Discussion tab: seeded thread with a Creator reply, @file tag
-    // navigation, and the @ autocomplete in the composer.
-    await user.click(within(repoDialog).getByRole('tab', { name: /Discussion/ }));
-    expect(within(repoDialog).getByText('Creator')).toBeInTheDocument();
-    expect(within(repoDialog).getByText(/does the polling pause/)).toBeInTheDocument();
-    const discBox = within(repoDialog).getByLabelText('Comment on this project');
-    await user.type(discBox, 'Please check @Ma');
-    expect(await within(repoDialog).findByRole('option', { name: /MapTracker\.tsx/ })).toBeInTheDocument();
-    await user.click(within(repoDialog).getByRole('option', { name: /MapTracker\.tsx/ }));
-    expect(discBox).toHaveValue('Please check @src/pages/MapTracker.tsx ');
-    // Clicking a posted @file tag jumps to the Code tab with the file open.
-    await user.click(within(repoDialog).getByRole('button', { name: '@src/App.tsx' }));
-    expect(await within(repoDialog).findByText('src/App.tsx')).toBeInTheDocument();
-    await user.click(within(repoDialog).getByRole('button', { name: 'Close repository viewer' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /repository/ })).not.toBeInTheDocument());
+    // D-202: the Pinned Projects / Education / Achievements sections were
+    // removed from the profile page (the portfolio manager in Settings
+    // stays) — the page must not fetch those lists or render them.
+    await screen.findByText('Ayesha Rahman');
+    expect(screen.queryByText('Pinned Projects')).toBeNull();
+    expect(screen.queryByText('Education')).toBeNull();
+    expect(screen.queryByText('Achievements')).toBeNull();
+    expect(calls.some((c) => c.url === '/api/profiles/5/projects')).toBe(false);
+    expect(calls.some((c) => c.url === '/api/profiles/5/education')).toBe(false);
+    expect(calls.some((c) => c.url === '/api/profiles/5/achievements')).toBe(false);
     // Sign out: section button -> confirmation popup -> /login.
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     const confirm = await screen.findByRole('dialog', { name: 'Sign out of UniLink?' });

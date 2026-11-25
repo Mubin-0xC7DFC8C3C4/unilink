@@ -9,6 +9,7 @@ import com.unilink.profile.api.ProfileController;
 import com.unilink.search.SearchService;
 import com.unilink.search.api.SearchController;
 import com.unilink.security.AccessPolicy;
+import com.unilink.security.IpResolver;
 import com.unilink.security.Principals;
 import com.unilink.storage.StorageGateway;
 import org.junit.jupiter.api.Test;
@@ -37,7 +38,7 @@ class WorkerDControllerGuardsTest {
 
   @Test void unverifiedCannotDeleteProfileSections() {
     var service = mock(ProfileService.class);
-    var c = new ProfileController(service, new AccessPolicy());
+    var c = new ProfileController(service, new AccessPolicy(), new IpResolver("127.0.0.1,::1"));
     var a = authWith(unverified());
     assertThrows(Exceptions.Forbidden.class, () -> c.deleteProject(a, 1L));
     assertThrows(Exceptions.Forbidden.class, () -> c.deleteEducation(a, 1L));
@@ -51,7 +52,7 @@ class WorkerDControllerGuardsTest {
 
   @Test void verifiedStudentReachesProfileService() {
     var service = mock(ProfileService.class);
-    var c = new ProfileController(service, new AccessPolicy());
+    var c = new ProfileController(service, new AccessPolicy(), new IpResolver("127.0.0.1,::1"));
     assertEquals("deleted", c.deleteProject(authWith(verified()), 1L).get("status"));
     verify(service).deleteProject(7L, 1L);
   }
