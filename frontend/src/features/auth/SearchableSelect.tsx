@@ -7,13 +7,15 @@ export interface SearchableOption { id: number; name: string }
  *  Sign Up they are the live /public catalogue responses, never a hardcoded
  *  list — and picking from the filtered list is the only way to set a value,
  *  so a selection is always a real catalogue id. */
-export function SearchableSelect({ id, options, value, onChange, placeholder = 'Search and select…', disabled = false }: {
+export function SearchableSelect({ id, options, value, onChange, placeholder = 'Search and select…', disabled = false, invalid = false, ariaDescribedBy }: {
   id: string;
   options: SearchableOption[];
   value: number | undefined;
   onChange: (id: number | undefined) => void;
   placeholder?: string;
   disabled?: boolean;
+  invalid?: boolean;
+  ariaDescribedBy?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -25,9 +27,15 @@ export function SearchableSelect({ id, options, value, onChange, placeholder = '
   // list immediately, so every field is fully visible after selection.
   return <div style={{ position: 'relative', zIndex: open ? 30 : undefined }}>
     <input id={id} role="combobox" aria-expanded={open} aria-controls={`${id}-listbox`} autoComplete="off"
-      disabled={disabled} placeholder={placeholder}
+      disabled={disabled} placeholder={placeholder} aria-invalid={invalid} aria-describedby={ariaDescribedBy}
       value={open ? query : (selected?.name ?? '')}
       onFocus={() => { setQuery(selected?.name ?? ''); setOpen(true); }}
+      // A click must also open the list: after picking an option the
+      // input keeps focus, so a later click fires no focus event and the
+      // list would otherwise never reopen (the user could not change a
+      // picked university/department/batch without clicking elsewhere
+      // first). Opening on click clears the query so the full list shows.
+      onClick={() => { if (!open) { setQuery(''); setOpen(true); } }}
       onBlur={() => { setOpen(false); setQuery(''); }}
       onChange={(e) => { setQuery(e.target.value); if (value !== undefined && e.target.value !== selected?.name) onChange(undefined); }}
       onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }} />

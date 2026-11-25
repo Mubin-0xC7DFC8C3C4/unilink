@@ -1,6 +1,17 @@
 import { useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, forwardRef } from 'react';
 export function Button({children, variant='outline', ...rest}: ButtonHTMLAttributes<HTMLButtonElement> & {variant?:'outline'|'primary'}){ return <button className={variant==='primary'?'btn btn-primary':'btn'} {...rest}>{children}</button>; }
-export function Field({label, error, children, htmlFor}:{label:string; error?:string; children:ReactNode; htmlFor?:string}){ return <div className="field"><label htmlFor={htmlFor}>{label}</label>{children}{error?<p className="field-error" role="alert">{error}</p>:null}</div>; }
+/** Field with professional validation states (owner brief 2026-11-25 §2):
+ *  `error` renders a red message (with id for aria-describedby);
+ *  `valid` + `validText` render a green border and a green confirmation
+ *  line — colour is never the only signal. */
+export function Field({label, error, valid, validText, children, htmlFor}:{label:string; error?:string; valid?:boolean; validText?:string; children:ReactNode; htmlFor?:string}){
+  const errorId = error && htmlFor ? `${htmlFor}-error` : undefined;
+  const cls = `field${error ? ' invalid' : ''}${valid && !error ? ' valid' : ''}`;
+  return <div className={cls}><label htmlFor={htmlFor}>{label}</label>{children}
+    {error ? <p className="field-error" role="alert" id={errorId}>{error}</p> : null}
+    {valid && !error && validText ? <p className="field-valid"><span aria-hidden="true">✓ </span>{validText}</p> : null}
+  </div>;
+}
 /** forwardRef: react-hook-form's register() passes a ref callback, and a plain
  *  function component drops it — every RHF form using Input submitted empty
  *  values. Same props and rendering, ref now reaches the <input>. */

@@ -18,7 +18,11 @@ WORKDIR /app
 # verification fails with "Cannot run program tesseract: No such file or
 # directory" (observed in the production log 2026-11-25; ocrStatus FAILED
 # for every application). Installed here, as root, before USER unilink.
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr && rm -rf /var/lib/apt/lists/*
+# D-181: the base package does not guarantee language data with
+# --no-install-recommends, and the adapter runs `-l ben+eng` — install
+# both language packs explicitly so a missing .traineddata file can
+# never fail every card (the adapter also retries with eng alone).
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-ben tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -m unilink && mkdir -p /data/unilink/storage && chown -R unilink:unilink /data
 COPY --from=build /src/target/unilink-backend-*.jar /app/app.jar
 USER unilink

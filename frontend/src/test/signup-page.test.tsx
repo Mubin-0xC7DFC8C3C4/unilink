@@ -7,32 +7,33 @@ import { AuthProvider } from '../app/auth';
 import { ThemeProvider } from '../app/ThemeContext';
 import SignUp from '../features/auth/SignUp';
 
-/** Phase 2.2 (owner instruction 2026-11-20): searchable catalogue
- *  selectors, two separate ID upload fields on the one-file contract,
- *  confirm password, and upload validation — all on the existing
- *  /auth/register API, unchanged. */
+/** SignUp (owner brief 2026-11-25 §1/§2): ten fields, one student ID
+ *  card image, no profile photo at registration (that stays in
+ *  Settings → Edit Profile), "University Address", per-field validation
+ *  with the brief's exact messages, and the 4-rule password checklist
+ *  from the real backend rules. */
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 const fetchMock = vi.fn();
-const calls: { url: string; method: string }[] = [];
+const calls: { url: string; method: string; body?: unknown }[] = [];
 function qc() { return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }); }
 function renderPage() {
-  return render(<QueryClientProvider client={qc()}><ThemeProvider><AuthProvider><MemoryRouter initialEntries={['/signup']}><Routes><Route path="/signup" element={<SignUp />} /><Route path="/otp" element={<div>OTP PAGE</div>} /></Routes></MemoryRouter></AuthProvider></ThemeProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={qc()}><ThemeProvider><AuthProvider><MemoryRouter initialEntries={['/signup']}><Routes><Route path="/signup" element={<SignUp />} /><Route path="/verification" element={<div>VERIFICATION PAGE</div>} /></Routes></MemoryRouter></AuthProvider></ThemeProvider></QueryClientProvider>);
 }
 
 beforeEach(() => {
   sessionStorage.clear(); calls.length = 0;
-  fetchMock.mockImplementation(async (input: unknown, init?: { method?: string }) => {
+  fetchMock.mockImplementation(async (input: unknown, init?: { method?: string; body?: unknown }) => {
     const url = String(input); const method = init?.method || 'GET';
-    calls.push({ url, method });
+    calls.push({ url, method, body: init?.body });
     if (url === '/api/csrf') return json({});
     if (url === '/api/auth/me') return json({ message: 'unauthenticated' }, 401);
     if (url === '/api/public/universities') return json([{ id: 1, name: 'Metropolitan University' }, { id: 2, name: 'University of Dhaka' }]);
     if (url.startsWith('/api/public/departments')) return json([{ id: 10, universityId: 1, name: 'CSE' }]);
     if (url.startsWith('/api/public/batches')) return json([{ id: 100, universityId: 1, departmentId: 10, label: '45' }]);
-    if (url === '/api/auth/register' && method === 'POST') return json({ id: 42 }, 201);
+    if (url === '/api/auth/register' && method === 'POST') return json({ id: 42, verificationToken: 'tok-42' }, 201);
     return json({ message: 'no mock route for ' + url }, 404);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -48,12 +49,14 @@ async function toStep3(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
   await user.click(screen.getByLabelText('Department'));
   await user.click(await screen.findByRole('option', { name: 'CSE' }));
-  await user.type(screen.getByLabelText('Address'), '123 Test Road, Dhaka');
+  await user.click(screen.getByLabelText('Batch'));
+  await user.click(await screen.findByRole('option', { name: '45' }));
+  await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
   await user.click(screen.getByRole('button', { name: /Continue/ }));
   await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
 }
 
-describe('SignUp page (Phase 2.2)', () => {
+describe('SignUp page (2026-11-25 upgrade)', () => {
   it('filters the university list as the user types', async () => {
     const user = userEvent.setup(); renderPage();
     await user.type(screen.getByLabelText('Full name'), 'Test User');
@@ -79,36 +82,83 @@ describe('SignUp page (Phase 2.2)', () => {
     await screen.findByText('Passwords do not match');
   });
 
+  it('validates step 1 on blur with the brief messages, and shows no errors on untouched fields', async () => {
+    const user = userEvent.setup(); renderPage();
+    expect(screen.queryByText('Full name is required.')).toBeNull();
+    expect(screen.queryByText('Phone number is required.')).toBeNull();
+    expect(screen.queryByText('Please enter your personal email address.')).toBeNull();
+    await user.click(screen.getByLabelText('Full name'));
+    await user.click(screen.getByLabelText('Phone'));
+    await screen.findByText('Full name is required.');
+    await user.type(screen.getByLabelText('Phone'), '01234567890');
+    await user.click(screen.getByLabelText('Personal email'));
+    await screen.findByText('Enter a valid Bangladeshi mobile number, e.g. 01712345678');
+    await user.type(screen.getByLabelText('Personal email'), 'not-an-email');
+    await user.click(screen.getByLabelText('Full name'));
+    await screen.findByText('Enter a valid email address');
+  });
+
+  it('shows the password checklist live from the real backend rules', async () => {
+    const user = userEvent.setup(); renderPage();
+    await toStep3(user);
+    await user.type(screen.getByLabelText('Password', { exact: true }), 'pass');
+    const items = screen.getAllByRole('listitem');
+    expect(items.some((li) => li.textContent === 'At least 8 characters' && li.classList.contains('unmet'))).toBe(true);
+    expect(items.some((li) => li.textContent === 'A lowercase letter' && li.classList.contains('met'))).toBe(true);
+    await user.type(screen.getByLabelText('Password', { exact: true }), 'word1A');
+    expect(screen.getAllByRole('listitem').every((li) => li.classList.contains('met'))).toBe(true);
+  });
+
+  it('has no profile photo upload at registration', async () => {
+    const user = userEvent.setup(); renderPage();
+    await toStep3(user);
+    expect(screen.queryByLabelText(/Profile photo/)).toBeNull();
+    expect(screen.queryByLabelText(/Back side/)).toBeNull();
+    expect(screen.getByLabelText('Student ID card image')).toBeInTheDocument();
+  });
+
   it('blocks submission when the passwords do not match', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password2');
-    await user.upload(screen.getByLabelText('Student ID card — Front side'), new File(['f'], 'front.jpg', { type: 'image/jpeg' }));
-    await user.upload(screen.getByLabelText('Student ID card — Back side'), new File(['b'], 'back.jpg', { type: 'image/jpeg' }));
-    await user.upload(screen.getByLabelText('Profile photo'), new File(['p'], 'photo.jpg', { type: 'image/jpeg' }));
+    await user.upload(screen.getByLabelText('Student ID card image'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
     await screen.findByText('Passwords do not match');
     expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
   });
 
-  it('requires the back side of the ID card before submitting', async () => {
+  it('requires the ID card image before submitting', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password1');
-    await user.upload(screen.getByLabelText('Student ID card — Front side'), new File(['f'], 'front.jpg', { type: 'image/jpeg' }));
-    await user.upload(screen.getByLabelText('Profile photo'), new File(['p'], 'photo.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
-    await screen.findByText('Please attach the back side of your ID card.');
+    await screen.findByText('Please upload your student ID card image.');
     expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
   });
 
-  it('rejects a non-image file on the front upload', async () => {
+  it('rejects a non-image file on the ID card upload', async () => {
     const user = userEvent.setup(); renderPage();
     await toStep3(user);
-    const input = screen.getByLabelText('Student ID card — Front side');
+    const input = screen.getByLabelText('Student ID card image');
     fireEvent.change(input, { target: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } });
     await screen.findByText('Use a JPG, PNG or WebP image.');
+  });
+
+  it('submits the single ID card and navigates to the verification flow', async () => {
+    const user = userEvent.setup(); renderPage();
+    await toStep3(user);
+    await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
+    await user.type(screen.getByLabelText('Confirm password'), 'Password1');
+    await user.upload(screen.getByLabelText('Student ID card image'), new File(['f'], 'id.jpg', { type: 'image/jpeg' }));
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText('VERIFICATION PAGE');
+    const reg = calls.find((c) => c.url === '/api/auth/register');
+    const fd = reg?.body as FormData;
+    expect((fd.get('idCard') as File).name).toBe('id.jpg');
+    expect(fd.get('profilePhoto')).toBeNull();
+    expect(fd.get('idCardBack')).toBeNull();
+    expect(sessionStorage.getItem('unilink:verificationToken')).toBe('tok-42');
   });
 });

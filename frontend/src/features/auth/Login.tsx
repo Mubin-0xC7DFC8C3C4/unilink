@@ -2,10 +2,16 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form'; import { z } from 'zod'; import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom'; import { useMutation } from '@tanstack/react-query';
 import { apiPost, errorMessage } from '../../api/client'; import { Button, Field, Input, PageHeader, SessionExpiredNotice } from '../../design/primitives'; import { useAuth } from '../../app/auth';
-const schema = z.object({ email: z.string().email('Enter a valid email address'), password: z.string().min(1,'Enter your password') });
+const schema = z.object({ email: z.string().min(1, 'Please enter your email address.').email('Enter a valid email address'), password: z.string().min(1, 'Please enter your password.') });
 export default function Login(){ const nav=useNavigate(); const { setUser }=useAuth();
   const [showPassword, setShowPassword] = useState(false);
-  const { register, handleSubmit, formState:{errors} } = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema) });
+  // Validation timing (brief §2B, as on SignUp): validate on blur, then
+  // live after the first submit attempt — never red errors on untouched
+  // fields at load. A filled field with no error shows a green border.
+  const { register, handleSubmit, formState:{errors, touchedFields}, watch } = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema), mode: 'onBlur' });
+  const email = watch('email'); const password = watch('password');
+  const emailValid = !!email && touchedFields.email && !errors.email;
+  const passwordValid = !!password && touchedFields.password && !errors.password;
   const mut = useMutation({ mutationFn: (d: z.infer<typeof schema>)=>apiPost<{fullName?:string; email?:string; state?:string; mustChangePassword?:boolean}>('/auth/login', d), onSuccess:(data, vars)=>{ setUser({fullName:data.fullName, email: vars.email, verified: data.state==='VERIFIED', mustChangePassword: data.mustChangePassword===true}); // D-094/D-098: a temporary-password login goes straight to the
     // change-password screen instead of the feed (whose calls would 403).
     nav('/feed'); } });
@@ -16,8 +22,8 @@ export default function Login(){ const nav=useNavigate(); const { setUser }=useA
   </div>
   <PageHeader eyebrow="Welcome back" title="Log in to UniLink" />
   <SessionExpiredNotice />
-  <form onSubmit={handleSubmit(d=>mut.mutate(d))} noValidate><Field label="Email address" error={errors.email?.message} htmlFor="email"><Input id="email" type="email" {...register('email')} autoComplete="email"/></Field>
-  <Field label="Password" error={errors.password?.message} htmlFor="password"><span style={{position:'relative', display:'block'}}><Input id="password" type={showPassword?'text':'password'} {...register('password')} autoComplete="current-password" style={{width:'100%', paddingRight:64}}/><button type="button" aria-pressed={showPassword} aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(s=>!s)} style={{position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', padding:'4px 6px', fontWeight:600, cursor:'pointer', color:'var(--text-secondary)'}}>{showPassword?'Hide':'Show'}</button></span></Field>
+  <form onSubmit={handleSubmit(d=>mut.mutate(d))} noValidate><Field label="Email address" error={errors.email?.message} valid={emailValid} validText="Looks good" htmlFor="email"><Input id="email" type="email" {...register('email')} autoComplete="email" aria-invalid={!!errors.email} aria-describedby={errors.email ? 'email-error' : undefined}/></Field>
+  <Field label="Password" error={errors.password?.message} valid={passwordValid} validText="Looks good" htmlFor="password"><span style={{position:'relative', display:'block'}}><Input id="password" type={showPassword?'text':'password'} {...register('password')} autoComplete="current-password" style={{width:'100%', paddingRight:64}} aria-invalid={!!errors.password} aria-describedby={errors.password ? 'password-error' : undefined}/><button type="button" aria-pressed={showPassword} aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(s=>!s)} style={{position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', padding:'4px 6px', fontWeight:600, cursor:'pointer', color:'var(--text-secondary)'}}>{showPassword?'Hide':'Show'}</button></span></Field>
   {/* A 401 here is a failed sign-in, not an expired session: errorMessage's
       401 text ("session expired") would mislead, so login failures name
       the actual cause. */}

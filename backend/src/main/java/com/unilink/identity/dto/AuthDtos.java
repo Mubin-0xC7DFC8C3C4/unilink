@@ -38,10 +38,21 @@ public final class AuthDtos {
   public record DeleteAccountRequest(@NotBlank String password) {}
   public record UserDto(Long id, String fullName, String email, String phone, Long universityId, Long departmentId,
                         Long batchId, String studentId, String state, boolean phoneVerified, boolean emailVerified,
-                        LocalDateTime createdAt, boolean mustChangePassword, Boolean emailSent) {}
+                        LocalDateTime createdAt, boolean mustChangePassword, Boolean emailSent,
+                        /** D-175: registration token, present only in the register / resubmit response. */ String verificationToken) {}
   /** Resend of the email verification link: either the user id (from the
    *  sign-up flow) or the email address (typed in by the user later). */
   public record EmailVerificationResendRequest(Long userId, String email) {}
   public record VerificationStatusDto(Long userId, String state, String requestStatus, Double ocrMatchScore,
                                       String ocrStatus, String rejectionReason) {}
+  /** Registration-status lookup (D-175): scoped by the registration token,
+   *  so it carries no user id, email or name — nothing an attacker can
+   *  enumerate. emailOtpSent is true while an unused, unexpired email OTP
+   *  exists for the registration. */
+  public record RegistrationStatusDto(String ocrStatus, String requestStatus, String state, Double ocrMatchScore,
+                                      String reason, boolean emailOtpSent, boolean emailVerified) {}
+  /** Email OTP (D-174): both calls are scoped by the registration token. */
+  public record EmailOtpResendRequest(@NotBlank String token) {}
+  public record EmailOtpVerifyRequest(@NotBlank String token, @NotBlank String otp) {}
+  public record EmailOtpVerifyResponse(boolean emailVerified, String state) {}
 }

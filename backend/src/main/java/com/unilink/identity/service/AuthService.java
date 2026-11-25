@@ -1,11 +1,14 @@
 package com.unilink.identity.service;
-import com.unilink.common.Exceptions; import com.unilink.config.AppProperties;
+import com.unilink.common.Exceptions; import com.unilink.common.Hashing;
+import com.unilink.config.AppProperties;
 import com.unilink.identity.domain.*; import com.unilink.identity.dto.AuthDtos.*;
+import com.unilink.identity.event.DomainEvents;
 import com.unilink.identity.repo.*; import com.unilink.security.LoginThrottle;
 import com.unilink.storage.ExifStripper;
 import com.unilink.storage.StorageGateway; import com.unilink.storage.UploadValidator;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.*; import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +18,7 @@ import java.io.IOException; import java.time.Duration; import java.time.LocalDat
 public class AuthService {
   private final UserRepository users; private final UserCredentialRepository creds;
   private final UniversityRepository universities; private final DepartmentRepository departments;
+  private final DepartmentCatalogRepository catalogs;
   private final BatchRepository batches; private final VerificationRequestRepository requests;
   private final VerificationAttemptRepository attempts; private final ProfileRepository profiles;
   private final EmailVerificationTokenRepository emailTokenRepo;
@@ -23,17 +27,19 @@ public class AuthService {
   private final PasswordEncoder encoder; private final LoginThrottle throttle;
   private final AuthenticationManager authManager; private final SessionService sessions;
   private final OcrJobService ocrJob; private final AppProperties props;
+  private final ApplicationEventPublisher events;
   public AuthService(UserRepository users, UserCredentialRepository creds, UniversityRepository universities,
       DepartmentRepository departments, BatchRepository batches, VerificationRequestRepository requests,
       VerificationAttemptRepository attempts, ProfileRepository profiles, EmailVerificationTokenRepository emailTokenRepo, StorageGateway storage,
       UploadValidator uploads, OtpService otp, PasswordEncoder encoder, LoginThrottle throttle,
       @Qualifier("studentAuthManager") AuthenticationManager authManager, SessionService sessions,
-      OcrJobService ocrJob, AppProperties props, LoginAttemptRepository loginAttempts){
+      OcrJobService ocrJob, AppProperties props, LoginAttemptRepository loginAttempts,
+      DepartmentCatalogRepository catalogs, ApplicationEventPublisher events){
     this.users=users; this.creds=creds; this.universities=universities; this.departments=departments; this.emailTokenRepo=emailTokenRepo;
     this.batches=batches; this.requests=requests; this.attempts=attempts; this.profiles=profiles;
     this.storage=storage; this.uploads=uploads; this.otp=otp; this.encoder=encoder; this.throttle=throttle;
     this.authManager=authManager; this.sessions=sessions; this.ocrJob=ocrJob; this.props=props;
-    this.loginAttempts=loginAttempts;
+    this.loginAttempts=loginAttempts; this.catalogs=catalogs; this.events=events;
   }
   /** Temporary passwords (FORCE_RESET, D-095) are valid for 24 hours from
    *  issue. Shared with AdminService/AdminAuthService so every issuer uses
@@ -66,13 +72,11 @@ public class AuthService {
       .anyMatch(other -> "SUSPENDED".equals(other.getState()) || "BANNED".equals(other.getState()));
     if (phoneBlocked) throw new Exceptions.Forbidden("This phone number is attached to a suspended or banned account");
     if (form.getIdCard()==null || form.getIdCard().isEmpty()) throw new Exceptions.BadRequest("ID_CARD_REQUIRED","Student ID card image is required (FR-AUTH-01)");
-    if (form.getProfilePhoto()==null || form.getProfilePhoto().isEmpty()) throw new Exceptions.BadRequest("PROFILE_PHOTO_REQUIRED","Profile photo is required (FR-AUTH-01)");
-    byte[] idBytes = bytes(form.getIdCard()); byte[] photoBytes = bytes(form.getProfilePhoto());
+    byte[] idBytes = bytes(form.getIdCard());
     // D-106: validate the ORIGINAL bytes (size is enforced pre-strip), then
     // strip EXIF; the stored bytes are the stripped ones. The sniffed type is
     // stored, not a hardcoded "image/jpeg" — a PNG/WebP upload is a PNG/WebP.
     String idType = uploads.validateImage(idBytes, UploadValidator.ID_CARD_MAX, form.getIdCard().getContentType());
-    String photoType = uploads.validateImage(photoBytes, UploadValidator.PHOTO_MAX, form.getProfilePhoto().getContentType());
     String idKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCard().getOriginalFilename()), idType, ExifStripper.strip(idBytes));
     // ID card back (2026-11-22): optional second image, validated and
     // stored privately exactly like the front; older clients that send
@@ -83,7 +87,16 @@ public class AuthService {
       String backType = uploads.validateImage(backBytes, UploadValidator.ID_CARD_MAX, form.getIdCardBack().getContentType());
       idBackKey = storage.store("id-cards", UploadValidator.sanitizeFileName(form.getIdCardBack().getOriginalFilename()), backType, ExifStripper.strip(backBytes));
     }
-    String photoKey = storage.store("profile-photos", UploadValidator.sanitizeFileName(form.getProfilePhoto().getOriginalFilename()), photoType, ExifStripper.strip(photoBytes));
+    // D-178: the profile photo is no longer collected at registration —
+    // students upload it from Settings → Edit Profile after logging in.
+    // The part is still accepted (old clients, and the Settings flow
+    // reuses the same storage) and stored when present.
+    String photoKey = null;
+    if (form.getProfilePhoto()!=null && !form.getProfilePhoto().isEmpty()){
+      byte[] photoBytes = bytes(form.getProfilePhoto());
+      String photoType = uploads.validateImage(photoBytes, UploadValidator.PHOTO_MAX, form.getProfilePhoto().getContentType());
+      photoKey = storage.store("profile-photos", UploadValidator.sanitizeFileName(form.getProfilePhoto().getOriginalFilename()), photoType, ExifStripper.strip(photoBytes));
+    }
     User u = new User();
     u.setUniversityId(uni.getId()); u.setDepartmentId(dept.getId()); u.setBatchId(batchId);
     u.setFullName(form.getFullName()); u.setEmail(form.getEmail()); u.setPhone(form.getPhone());
@@ -95,20 +108,24 @@ public class AuthService {
     VerificationRequest req = new VerificationRequest();
     req.setUserId(u.getId()); req.setStatus("AWAITING_VERIFICATION"); req.setOcrStatus("PENDING");
     req.setIdCardKey(idKey); req.setProfilePhotoKey(photoKey);
+    // D-175: the registration token scopes the status / email-OTP
+    // endpoints. Only the hash is stored; the plaintext is returned once
+    // in the register response. It expires after 24 hours.
+    String verificationToken = OtpService.newToken();
+    req.setVerificationTokenHash(Hashing.sha256(verificationToken));
+    req.setVerificationTokenExpiresAt(LocalDateTime.now().plusHours(24));
     req = requests.save(req);
-    otp.sendPhoneOtp(u);
-    // Seed the resend cooldown from the registration send, so the 60 s
-    // cooldown (D-081) applies from the first send, not just from a resend.
-    throttle.tryAcquire("otp-resend:"+u.getId(), 5, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW);
-    // The registration send is an OTP send to this phone, so it also counts
-    // towards the per-phone cap (D-099): registering many accounts on one
-    // phone must not bypass the resend cap. Best-effort like the seed
-    // above — registration itself is never blocked by the cap (D-077 soft
-    // uniqueness: a shared family phone must still be able to sign up).
-    throttle.tryAcquire("otp-resend-phone:"+u.getPhone(), 5, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW);
-    boolean emailSent = otp.sendEmailVerificationLink(u, props.baseUrl());
-    ocrJob.runOcr(req.getId(), idKey, u.getFullName(), u.getStudentId(), uni.getName());
-    return toDto(u, false, emailSent);
+    // D-173: the journey is OCR → email OTP code → active. No phone OTP
+    // and no email link are sent at registration any more; the email OTP
+    // is sent by the OCR job only when it reaches AUTO_VERIFIED.
+    ocrJob.runOcr(req.getId(), idKey, ocrSubject(u, uni.getName(), dept));
+    return toDto(u, false, null, verificationToken);
+  }
+  /** The registration data the OCR matcher compares against the card. */
+  private IdCardMatcher.Subject ocrSubject(User u, String universityName, Department dept){
+    String deptName = dept.getName();
+    String deptShort = catalogs.findById(dept.getCatalogId()).map(DepartmentCatalog::getShortName).orElse(null);
+    return new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), universityName, deptName, deptShort, u.getAddress());
   }
   public static UserDto toDto(User u){
     return toDto(u, false);
@@ -123,8 +140,13 @@ public class AuthService {
    *  tells the frontend whether the verification email actually went out,
    *  so a failed send is visible and re-sendable instead of silent. */
   public static UserDto toDto(User u, boolean mustChangePassword, Boolean emailSent){
+    return toDto(u, mustChangePassword, emailSent, null);
+  }
+  /** verificationToken is meaningful only in the register / resubmit
+   *  response (D-175): the plaintext registration token, returned once. */
+  public static UserDto toDto(User u, boolean mustChangePassword, Boolean emailSent, String verificationToken){
     return new UserDto(u.getId(), u.getFullName(), u.getEmail(), u.getPhone(), u.getUniversityId(), u.getDepartmentId(),
-      u.getBatchId(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt(), mustChangePassword, emailSent);
+      u.getBatchId(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt()!=null, u.getEmailVerifiedAt()!=null, u.getCreatedAt(), mustChangePassword, emailSent, verificationToken);
   }
   /** D-094: whether the stored credential carries the must-change flag. */
   public boolean mustChangePassword(Long userId){
@@ -346,12 +368,109 @@ public class AuthService {
     VerificationRequest req = new VerificationRequest();
     req.setUserId(userId); req.setStatus("PENDING_REVIEW"); req.setOcrStatus("PENDING"); req.setIdCardKey(idKey);
     req.setProfilePhotoKey(u.getProfilePhotoKey());
+    // D-175: a fresh registration token for the new attempt, so the
+    // student re-enters the verification flow (Step A) for this resubmission.
+    String verificationToken = OtpService.newToken();
+    req.setVerificationTokenHash(Hashing.sha256(verificationToken));
+    req.setVerificationTokenExpiresAt(LocalDateTime.now().plusHours(24));
     req = requests.save(req);
     VerificationAttempt att = new VerificationAttempt();
     att.setUserId(userId); att.setVerificationRequestId(req.getId()); att.setOutcome("RESUBMIT"); attempts.save(att);
     String uniName = universities.findById(u.getUniversityId()).map(University::getName).orElse(null);
-    ocrJob.runOcr(req.getId(), idKey, u.getFullName(), u.getStudentId(), uniName);
-    return toDto(u);
+    var dept = departments.findById(u.getDepartmentId()).orElse(null);
+    ocrJob.runOcr(req.getId(), idKey, dept == null
+      ? new IdCardMatcher.Subject(u.getFullName(), u.getStudentId(), uniName, null, null, u.getAddress())
+      : ocrSubject(u, uniName, dept));
+    return toDto(u, false, null, verificationToken);
+  }
+  /** Resolves a registration by its token (D-175). Unknown, malformed and
+   *  expired tokens all answer the same 404 — the token is a random
+   *  128-bit value, so there is nothing to enumerate, and the response
+   *  must not distinguish "no such registration" from "expired". */
+  @Transactional(readOnly = true)
+  public VerificationRequest resolveRegistration(String token){
+    if (token == null || token.isBlank()) throw new Exceptions.NotFound("Registration");
+    var req = requests.findTopByVerificationTokenHashOrderBySubmittedAtDesc(Hashing.sha256(token)).orElse(null);
+    if (req == null || req.getVerificationTokenExpiresAt() == null || req.getVerificationTokenExpiresAt().isBefore(LocalDateTime.now()))
+      throw new Exceptions.NotFound("Registration");
+    return req;
+  }
+  /** Token-scoped verification status (D-175): no user id, email or name
+   *  in the request or the response. */
+  @Transactional(readOnly = true)
+  public RegistrationStatusDto registrationStatus(String token){
+    var req = resolveRegistration(token);
+    User u = getUserOr404(req.getUserId());
+    return new RegistrationStatusDto(req.getOcrStatus(), req.getStatus(), u.getState(), req.getOcrMatchScore(),
+      req.getReason(), otp.hasActiveEmailOtp(u.getId()), u.getEmailVerifiedAt() != null);
+  }
+  /** Email OTP resend (D-174): same caps as the phone resend (60 s
+   *  cooldown, 5/hour per user, 5/hour per email, 10/hour per IP,
+   *  atomically acquired). An already-verified email gets the same
+   *  generic 200 with no send and no quota consumed — the response
+   *  leaks neither existence nor verification state. A delivery failure
+   *  is a clean 503, not a silent success. */
+  @Transactional
+  public Map<String,String> resendEmailOtp(String token, String ip){
+    var req = resolveRegistration(token);
+    User u = users.findById(req.getUserId()).orElse(null);
+    if (u == null || u.getEmailVerifiedAt() != null) return Map.of("status", "Verification code resent");
+    // D-174: a code is only ever sent after OCR auto-verified the card.
+    // A resend for a failed, inconclusive or still-running verification
+    // is refused — the caller already holds the token, so this 409 leaks
+    // nothing about any other account.
+    var latest = requests.findTopByUserIdOrderBySubmittedAtDesc(u.getId()).orElse(null);
+    if (latest == null || !"AUTO_VERIFIED".equals(latest.getOcrStatus()))
+      throw new Exceptions.Conflict("VERIFICATION_NOT_COMPLETE", "Your student ID verification has not completed yet.");
+    String userKey = "email-otp-resend:" + u.getId();
+    String emailKey = u.getEmail() == null || u.getEmail().isBlank() ? null : "email-otp-resend-email:" + u.getEmail().toLowerCase();
+    String ipKey = "email-otp-resend-ip:" + ip;
+    if (throttle.isLocked(userKey) || (emailKey != null && throttle.isLocked(emailKey)) || throttle.isLocked(ipKey))
+      throw new Exceptions.TooManyRequests("Too many verification code requests. Try again later.");
+    if (throttle.isCoolingDown(userKey, OTP_RESEND_COOLDOWN))
+      throw new Exceptions.TooManyRequests("Please wait a minute before requesting another verification code.");
+    Map<String,Integer> caps = new LinkedHashMap<>();
+    caps.put(userKey, 5);
+    if (emailKey != null) caps.put(emailKey, 5);
+    caps.put(ipKey, 10);
+    if (!throttle.tryAcquireAll(caps, OTP_RESEND_WINDOW, OTP_RESEND_WINDOW, userKey, OTP_RESEND_COOLDOWN))
+      throw new Exceptions.TooManyRequests("Too many verification code requests. Try again later.");
+    if (!otp.sendEmailOtp(u))
+      throw new Exceptions.ServiceUnavailable("We could not send your verification code. Please try again in a moment.");
+    return Map.of("status", "Verification code resent");
+  }
+  /** Email OTP verification (D-174/D-176): the code proves control of the
+   *  personal inbox. When OCR auto-verified the card, the account is
+   *  activated now — REGISTERED → PENDING_REVIEW → VERIFIED in one
+   *  transaction (the two legal steps; the state machine is unchanged) —
+   *  and the latest request is marked APPROVED so it leaves the admin
+   *  queue and cannot be decided twice. The same StudentVerified event
+   *  fires as for an admin approval, so the in-app notice and the
+   *  decision email behave identically. A MANUAL_REVIEW account stays
+   *  PENDING_REVIEW for the admin decision; a REJECTED account stays
+   *  rejected. No session is created and the user is not logged in — the
+   *  frontend sends the student to /login explicitly. */
+  @Transactional
+  public EmailOtpVerifyResponse verifyEmailOtp(String token, String code){
+    var req = resolveRegistration(token);
+    User u = getUserOr404(req.getUserId());
+    otp.verifyEmailOtp(u, code);
+    users.save(u);
+    var latest = requests.findTopByUserIdOrderBySubmittedAtDesc(u.getId()).orElse(null);
+    if (latest != null && "AUTO_VERIFIED".equals(latest.getOcrStatus())
+        && ("REGISTERED".equals(u.getState()) || "PENDING_REVIEW".equals(u.getState()))){
+      AccountState cur = AccountState.of(u.getState());
+      if (cur == AccountState.REGISTERED){
+        u.setState(cur.transitionTo(AccountState.PENDING_REVIEW).name());
+        cur = AccountState.PENDING_REVIEW;
+      }
+      u.setState(cur.transitionTo(AccountState.VERIFIED).name());
+      users.save(u);
+      latest.setStatus("APPROVED"); latest.setDecidedAt(LocalDateTime.now());
+      requests.save(latest);
+      events.publishEvent(new DomainEvents.StudentVerified(u.getId()));
+    }
+    return new EmailOtpVerifyResponse(u.getEmailVerifiedAt() != null, u.getState());
   }
   @Transactional(readOnly=true)
   public VerificationStatusDto verificationStatus(Long userId){

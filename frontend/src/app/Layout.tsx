@@ -72,7 +72,7 @@ export function Layout(){
   // once /auth/me answers the restored user flipped it to the full app
   // header — the 2-second revert. A signed-in user on / now keeps the
   // public header too; the full header belongs to the app routes only.
-  const AUTH_ROUTES = ['/login', '/signup', '/forgot-password', '/otp', '/pending', '/verification-preview'];
+  const AUTH_ROUTES = ['/login', '/signup', '/forgot-password', '/otp', '/pending', '/verification', '/verification-preview'];
   const minimalHeader = AUTH_ROUTES.includes(loc.pathname) || loc.pathname === '/';
   // Owner polish (2026-11-20): during verification the header carries the
   // brand only — no Log in / Sign up buttons.

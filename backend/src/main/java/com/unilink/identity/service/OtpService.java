@@ -6,16 +6,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom; import java.time.LocalDateTime; import java.util.UUID;
-/** OTP (6-digit, 5 min, 5 attempts, hashed, single-use) + email link (24 h, hashed, single-use) — D-011. */
+/** OTP (6-digit, 5 min, 5 attempts, hashed, single-use) + email link (24 h, hashed, single-use) — D-011.
+ *  D-174: email OTP codes are 6 digits, hashed, single-use, 10-minute
+ *  expiry — sent only after OCR reaches AUTO_VERIFIED. */
 @Service
 public class OtpService {
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OtpService.class);
   private final PhoneOtpRepository phoneOtps; private final EmailVerificationTokenRepository emailTokens;
-  private final PasswordResetTokenRepository resetTokens; private final SmsProvider sms; private final EmailProvider email;
+  private final PasswordResetTokenRepository resetTokens; private final EmailOtpRepository emailOtps;
+  private final SmsProvider sms; private final EmailProvider email;
   private static final SecureRandom RANDOM = new SecureRandom();
   public OtpService(PhoneOtpRepository p, EmailVerificationTokenRepository e, PasswordResetTokenRepository r,
-                    SmsProvider sms, EmailProvider email){
-    phoneOtps=p; emailTokens=e; resetTokens=r; this.sms=sms; this.email=email;
+                    EmailOtpRepository emailOtps, SmsProvider sms, EmailProvider email){
+    phoneOtps=p; emailTokens=e; resetTokens=r; this.emailOtps=emailOtps; this.sms=sms; this.email=email;
   }
   public static String newOtp(){ return String.format("%06d", RANDOM.nextInt(1_000_000)); }
   public static String newToken(){ return UUID.randomUUID().toString().replace("-","") + UUID.randomUUID().toString().replace("-",""); }
@@ -95,6 +98,46 @@ public class OtpService {
     // even when the mail provider is down.
     try { email.sendOtp(user.getEmail(), otp); }
     catch (Exception e){ log.error("Password reset code send failed for user {}: {}", user.getId(), e.getMessage()); }
+  }
+  /** Email OTP code (D-174): 6 digits, 10-minute expiry, hashed,
+   *  single-use. Issuing retires earlier unused codes, so only the
+   *  newest code in the inbox works. Returns true only when the provider
+   *  accepted the message — a failed send never throws, so the caller
+   *  (the OCR job) is not rolled back by a mail outage; the frontend
+   *  offers a resend instead. The code itself is never logged. */
+  @Transactional
+  public boolean sendEmailOtp(User user){
+    String otp = newOtp();
+    emailOtps.findByUserIdAndUsedFalse(user.getId()).forEach(old -> { old.setUsed(true); emailOtps.save(old); });
+    EmailOtp row = new EmailOtp();
+    row.setUserId(user.getId()); row.setOtpHash(Hashing.sha256(otp)); row.setAttempts(0); row.setUsed(false);
+    row.setExpiresAt(LocalDateTime.now().plusMinutes(10));
+    emailOtps.save(row);
+    try { email.sendOtp(user.getEmail(), otp); return true; }
+    catch (Exception e){ log.error("Email OTP send failed for user {}: {}", user.getId(), e.getMessage()); return false; }
+  }
+  /** Whether an unused, unexpired email OTP exists for the user — the
+   *  registration-status response reports this as emailOtpSent. */
+  @Transactional(readOnly = true)
+  public boolean hasActiveEmailOtp(Long userId){
+    return emailOtps.findTopByUserIdAndUsedFalseOrderByCreatedAtDesc(userId)
+      .map(row -> row.getExpiresAt() != null && row.getExpiresAt().isAfter(LocalDateTime.now())).orElse(false);
+  }
+  @Transactional
+  public void verifyEmailOtp(User user, String otp){
+    EmailOtp row = emailOtps.findTopByUserIdAndUsedFalseOrderByCreatedAtDesc(user.getId())
+      .orElseThrow(() -> new Exceptions.BadRequest("OTP_NOT_FOUND","No active verification code. Request a new one."));
+    if (row.getExpiresAt().isBefore(LocalDateTime.now())) throw new Exceptions.BadRequest("OTP_EXPIRED","Verification code has expired. Request a new one.");
+    if (row.getAttempts()>=5) throw new Exceptions.BadRequest("OTP_ATTEMPTS_EXCEEDED","Too many wrong attempts. Request a new verification code.");
+    if (!Hashing.sha256(otp).equals(row.getOtpHash())){
+      // Atomic REQUIRES_NEW increment (D-103): the OTP_INVALID exception
+      // below rolls back this method's transaction, which used to roll
+      // back the attempt count as well — the cap could never engage.
+      emailOtps.incrementAttempts(row.getId());
+      throw new Exceptions.BadRequest("OTP_INVALID","Incorrect code");
+    }
+    row.setUsed(true); emailOtps.save(row);
+    user.setEmailVerifiedAt(LocalDateTime.now());
   }
   @Transactional
   public void verifyPasswordResetOtp(User user, String otp){

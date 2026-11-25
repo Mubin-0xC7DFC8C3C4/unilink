@@ -3,6 +3,10 @@
   --background: #fdfdfb; --surface: #ffffff; --surface-muted: #f2f1ed; --border: #e4e2dc;
   --text-primary: #14140f; --text-secondary: #5b5951; --text-muted: #5b5951; /* I-22: was #8b8b8b (3.35:1, below AA); now the secondary value (6.89:1) */
   --primary: #14140f; --on-primary: #fdfdfb; --scrim: #a8a8a5;
+  /* D-182/validation (2026-11-25): form validation colours. Brick red and
+   * leaf green on the warm ink/paper palette; both meet AA against the
+   * light surface (red 5.9:1, green 4.9:1) and the dark surface. */
+  --danger: #b3261e; --success: #1e7b34;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", "Noto Sans", sans-serif;
   --display: 2.5rem; --headline: 1.5rem; --title: 1.125rem; --body-lg: 1.125rem; --body-md: 0.875rem; --body-sm: 0.75rem; --label-caps: 0.6875rem; --stat: 1.75rem;
   --space-xs: 4px; --space-sm: 8px; --space-md: 16px; --space-lg: 24px; --space-xl: 32px; --space-xxl: 48px;
@@ -13,6 +17,7 @@
   --background: #0e0e0c; --surface: #171715; --surface-muted: #22221e; --border: #262622;
   --text-primary: #f5f4f0; --text-secondary: #a9a69c; --text-muted: #a9a69c; /* I-22: was #726f67 (3.85:1, below AA); now the secondary value (7.93:1) */
   --primary: #f5f4f0; --on-primary: #0e0e0c; --scrim: #a8a8a5;
+  --danger: #f0837a; --success: #6fbf7f;
 }
 * { box-sizing: border-box; }
 html { font-family: var(--font); }
@@ -43,8 +48,35 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .field { display: block; margin-bottom: var(--space-md); }
 .field label { display: block; font-size: var(--body-md); margin-bottom: var(--space-xs); }
 .field input, .field select, .field textarea { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; min-height: 36px; }
-.field-error { color: var(--text-primary); font-size: var(--body-sm); margin-top: var(--space-xs); }
+.field-error { color: var(--danger); font-size: var(--body-sm); margin-top: var(--space-xs); }
 .field-error::before { content: "Error: "; font-weight: 600; }
+/* Professional validation (owner brief 2026-11-25 §2): an invalid field
+ * gets a red border and a red message; a valid field gets a green border
+ * and a green confirmation line. Colour is never the only signal — the
+ * message text and the ✓/✗ marks carry the meaning too. */
+.field.invalid input, .field.invalid select, .field.invalid textarea { border-color: var(--danger); }
+.field.invalid input:focus-visible, .field.invalid select:focus-visible, .field.invalid textarea:focus-visible { outline-color: var(--danger); }
+.field.valid input, .field.valid select, .field.valid textarea { border-color: var(--success); }
+.field-valid { color: var(--success); font-size: var(--body-sm); margin-top: var(--space-xs); }
+/* Password requirements checklist: each rule is red with ✗ until met,
+ * then green with ✓. */
+.pw-checks { list-style: none; margin: 8px 0 0; padding: 0; font-size: var(--body-sm); }
+.pw-checks li { margin-top: 2px; }
+.pw-checks li::before { font-weight: 700; margin-right: 6px; }
+.pw-checks li.unmet { color: var(--danger); }
+.pw-checks li.unmet::before { content: "✗"; }
+.pw-checks li.met { color: var(--success); }
+.pw-checks li.met::before { content: "✓"; }
+/* Six-box OTP entry (reference screenshot 1): large centred digits. */
+.otp-boxes { display: flex; gap: 8px; justify-content: center; }
+.otp-boxes input { width: 48px; height: 56px; text-align: center; font-size: 1.5rem; font-weight: 500; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0; }
+.otp-boxes.invalid input { border-color: var(--danger); }
+/* Verification progress / success screens (reference screenshots 2–3):
+ * a narrow centred column under the minimal header. */
+.verify-center { max-width: 560px; margin: 0 auto; text-align: center; padding-top: var(--space-xxl); }
+.spinner { width: 40px; height: 40px; margin: 0 auto var(--space-md); border: 4px solid var(--border); border-top-color: var(--text-primary); border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.success-ring { width: 64px; height: 64px; margin: 0 auto var(--space-md); border-radius: 50%; border: 3px solid var(--success); color: var(--success); display: grid; place-items: center; font-size: 2rem; font-weight: 700; }
 .input-search { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; min-height: 36px; }
 .ruled-list { list-style: none; margin: 0; padding: 0; }
 .ruled-list > li { padding: var(--space-md) 0; border-bottom: 1px solid var(--border); }

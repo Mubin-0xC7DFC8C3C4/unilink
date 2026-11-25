@@ -14,4 +14,7 @@ public interface VerificationRequestRepository extends JpaRepository<Verificatio
   List<VerificationRequest> findByStatusOrderBySubmittedAtAsc(String status);
   List<VerificationRequest> findAllByOrderBySubmittedAtAsc();
   long countByStatus(String status);
+  /** Registration-token lookup (D-175): the newest request carrying this
+   *  token hash. Callers must also check the token expiry themselves. */
+  Optional<VerificationRequest> findTopByVerificationTokenHashOrderBySubmittedAtDesc(String verificationTokenHash);
 }

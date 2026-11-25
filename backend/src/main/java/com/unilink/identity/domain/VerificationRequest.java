@@ -15,6 +15,11 @@ public class VerificationRequest {
   @Column(name="ocr_status") private String ocrStatus;
   @Column(name="id_card_key") private String idCardKey;
   @Column(name="profile_photo_key") private String profilePhotoKey;
+  /** Registration token (D-175): only the SHA-256 hash is stored. The
+   *  plaintext token is returned once, in the register response, and
+   *  scopes the status / email-OTP endpoints for that registration. */
+  @Column(name="verification_token_hash") private String verificationTokenHash;
+  @Column(name="verification_token_expires_at") private LocalDateTime verificationTokenExpiresAt;
   @Column(name="submitted_at") private LocalDateTime submittedAt;
   @Column(name="decided_at") private LocalDateTime decidedAt;
   @Column(name="decided_by") private Long decidedBy;

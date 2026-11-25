@@ -71,8 +71,10 @@ describe('Student Login page (Phase 2.1)', () => {
     const user = userEvent.setup();
     renderLogin();
     await user.click(screen.getByRole('button', { name: 'Log in' }));
-    expect(await screen.findByText(/Enter a valid email address/)).toBeInTheDocument();
-    expect(await screen.findByText(/Enter your password/)).toBeInTheDocument();
+    // Empty fields get the brief's "please enter" messages (an empty
+    // email is missing, not malformed).
+    expect(await screen.findByText(/Please enter your email address\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Please enter your password\./)).toBeInTheDocument();
     expect(calls.some((c) => c.url === '/api/auth/login')).toBe(false);
   });
 

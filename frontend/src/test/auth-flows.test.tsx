@@ -19,7 +19,9 @@ const json = (body: unknown, status = 200) =>
 
 interface Call { url: string; method: string; body: unknown }
 let calls: Call[] = [];
-let route: (url: string, method: string, body: unknown) => Response | undefined;
+// The fetch mock is async, so a route may also return a promise — used by
+// the slow-response test to hold one response back.
+let route: (url: string, method: string, body: unknown) => Response | Promise<Response> | undefined;
 
 const fetchMock = vi.fn();
 function defaultRoute(url: string): Response | undefined {
@@ -44,7 +46,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('fetch', fetchMock);
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 function jsonBody(call: Call): Record<string, unknown> {
   return JSON.parse(String(call.body)) as Record<string, unknown>;
@@ -55,13 +57,13 @@ describe('SignUp (I-6)', () => {
     if (url === '/api/public/universities') return json([{ id: 1, name: 'Metropolitan University' }, { id: 2, name: 'University of Dhaka' }]);
     if (url.startsWith('/api/public/departments')) return json([{ id: 10, universityId: 1, name: 'CSE' }]);
     if (url.startsWith('/api/public/batches')) return json([{ id: 100, universityId: 1, departmentId: 10, label: '45' }]);
-    if (url === '/api/auth/register' && method === 'POST') return json({ id: 42, fullName: 'Test User', state: 'REGISTERED' }, 201);
+    if (url === '/api/auth/register' && method === 'POST') return json({ id: 42, fullName: 'Test User', state: 'REGISTERED', verificationToken: 'tok-42' }, 201);
     return defaultRoute(url);
   }
-  it('loads the catalog and submits universityId/departmentId/batchId + idCard', async () => {
+  it('loads the catalog and submits universityId/departmentId/batchId + one idCard, then goes to verification', async () => {
     route = catalogRoute;
     const user = userEvent.setup();
-    renderWithProviders(<Routes><Route path="/signup" element={<SignUp />} /><Route path="/otp" element={<div>OTP PAGE</div>} /></Routes>, ['/signup']);
+    renderWithProviders(<Routes><Route path="/signup" element={<SignUp />} /><Route path="/verification" element={<div>VERIFICATION PAGE</div>} /></Routes>, ['/signup']);
     await user.type(screen.getByLabelText('Full name'), 'Test User');
     await user.type(screen.getByLabelText('Phone'), '01712345678');
     await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
@@ -75,16 +77,17 @@ describe('SignUp (I-6)', () => {
     await user.click(await screen.findByRole('option', { name: 'CSE' }));
     await user.click(screen.getByLabelText('Batch'));
     await user.click(await screen.findByRole('option', { name: '45' }));
-    await user.type(screen.getByLabelText('Address'), '123 Test Road, Dhaka');
+    await user.type(screen.getByLabelText('University Address'), '123 Test Road, Dhaka');
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await user.type(screen.getByLabelText('Student ID number'), 'CSE-001');
     await user.type(screen.getByLabelText('Password', { exact: true }), 'Password1');
     await user.type(screen.getByLabelText('Confirm password'), 'Password1');
-    await user.upload(screen.getByLabelText('Student ID card — Front side'), new File(['front'], 'id-front.jpg', { type: 'image/jpeg' }));
-    await user.upload(screen.getByLabelText('Student ID card — Back side'), new File(['back'], 'id-back.jpg', { type: 'image/jpeg' }));
-    await user.upload(screen.getByLabelText('Profile photo'), new File(['photo'], 'photo.jpg', { type: 'image/jpeg' }));
+    // One student ID card image only (D-177/D-178): no back side, no
+    // profile photo at registration — the photo is uploaded later from
+    // Settings → Edit Profile.
+    await user.upload(screen.getByLabelText('Student ID card image'), new File(['id'], 'id-card.jpg', { type: 'image/jpeg' }));
     await user.click(screen.getByRole('button', { name: 'Create account' }));
-    await screen.findByText('OTP PAGE');
+    await screen.findByText('VERIFICATION PAGE');
     const reg = calls.find((c) => c.url === '/api/auth/register');
     expect(reg?.method).toBe('POST');
     const fd = reg?.body as FormData;
@@ -92,13 +95,16 @@ describe('SignUp (I-6)', () => {
     expect(fd.get('departmentId')).toBe('10');
     expect(fd.get('batchId')).toBe('100');
     expect(fd.get('phone')).toBe('01712345678');
-    // The one-file contract: the FRONT side goes out as idCard; the back
-    // side and the confirm password are never sent (owner decision A1).
-    expect((fd.get('idCard') as File).name).toBe('id-front.jpg');
+    expect((fd.get('idCard') as File).name).toBe('id-card.jpg');
     expect(fd.get('idCardBack')).toBeNull();
+    expect(fd.get('profilePhoto')).toBeNull();
     expect(fd.get('confirmPassword')).toBeNull();
     expect(fd.get('idCardImage')).toBeNull();
-    expect(sessionStorage.getItem('unilink:otpUserId')).toBe('42');
+    // The registration token scopes the verification flow; the phone-OTP
+    // hand-off is gone with the phone step (D-173).
+    expect(sessionStorage.getItem('unilink:verificationToken')).toBe('tok-42');
+    expect(sessionStorage.getItem('unilink:otpUserId')).toBeNull();
+    expect(calls.some((c) => c.url.startsWith('/api/public/batches?universityId=1'))).toBe(true);
   });
   it('rejects a non-Bangladeshi phone number before any register call', async () => {
     route = catalogRoute;
@@ -110,6 +116,116 @@ describe('SignUp (I-6)', () => {
     await user.click(screen.getByRole('button', { name: /Continue/ }));
     await screen.findByText('Enter a valid Bangladeshi mobile number, e.g. 01712345678');
     expect(calls.some((c) => c.url === '/api/auth/register')).toBe(false);
+  });
+});
+
+describe('Signup catalogue chain (2026-11-24)', () => {
+  const catalog = (url: string) => {
+    if (url === '/api/public/universities') return json([{ id: 1, name: 'Metropolitan University' }, { id: 2, name: 'University of Dhaka' }]);
+    if (url === '/api/public/departments?universityId=1') return json([{ id: 10, universityId: 1, name: 'CSE' }, { id: 11, universityId: 1, name: 'EEE' }]);
+    if (url === '/api/public/departments?universityId=2') return json([{ id: 20, universityId: 2, name: 'Physics' }]);
+    if (url.startsWith('/api/public/batches')) return json([{ id: 100, universityId: 1, departmentId: 10, label: '45' }]);
+    return defaultRoute(url);
+  };
+  async function toStep1(user: ReturnType<typeof userEvent.setup>) {
+    renderWithProviders(<Routes><Route path="/signup" element={<SignUp />} /></Routes>, ['/signup']);
+    await user.type(screen.getByLabelText('Full name'), 'Test User');
+    await user.type(screen.getByLabelText('Phone'), '01712345678');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+  }
+  it('retries a transient catalogue failure and the university list appears', async () => {
+    let attempts = 0;
+    route = (url: string) => {
+      if (url === '/api/public/universities') { attempts += 1; return attempts === 1 ? json({ message: 'boom' }, 500) : catalog(url); }
+      return catalog(url);
+    };
+    const user = userEvent.setup();
+    await toStep1(user);
+    await user.click(screen.getByLabelText('University'));
+    await screen.findByRole('option', { name: 'Metropolitan University' }, { timeout: 5000 });
+    expect(attempts).toBeGreaterThanOrEqual(2);
+  });
+  it('handles an empty university response with a retry option', async () => {
+    route = (url: string) => {
+      if (url === '/api/public/universities') return json([]);
+      return catalog(url);
+    };
+    const user = userEvent.setup();
+    await toStep1(user);
+    await screen.findByText('No universities are available right now.');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+  // Real timers: the retry backoffs sum to ~60 s, so this test waits for the
+  // whole cycle to exhaust before asserting the error state and the manual
+  // retry. Fake timers deadlock with user-event + react-query here.
+  it('shows an error with a retry button when the catalogue keeps failing, and retrying loads it', async () => {
+    let uniFails = true;
+    route = (url: string) => {
+      if (url === '/api/public/universities') return uniFails ? json({ message: 'boom' }, 500) : catalog(url);
+      return catalog(url);
+    };
+    const user = userEvent.setup();
+    await toStep1(user);
+    await screen.findByText(/Could not load universities/, {}, { timeout: 90000 });
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    uniFails = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await user.click(screen.getByLabelText('University'));
+    await screen.findByRole('option', { name: 'Metropolitan University' });
+  }, 90000);
+  it('loads departments for the chosen university and batches for the chosen department, and resets children on change', async () => {
+    route = catalog;
+    const user = userEvent.setup();
+    await toStep1(user);
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
+    expect(calls.some((c) => c.url === '/api/public/departments?universityId=1')).toBe(true);
+    await user.click(screen.getByLabelText('Department'));
+    await user.click(await screen.findByRole('option', { name: 'CSE' }));
+    expect(calls.some((c) => c.url.startsWith('/api/public/batches?universityId=1&departmentId=10'))).toBe(true);
+    await user.click(screen.getByLabelText('Batch'));
+    await user.click(await screen.findByRole('option', { name: '45' }));
+    expect(screen.getByLabelText('Batch')).toHaveValue('45');
+    // Changing the department resets the batch. (The searchable select
+    // filters by the current value, so clear the text first to see all options.)
+    await user.clear(screen.getByLabelText('Department'));
+    await user.click(screen.getByLabelText('Department'));
+    await user.click(await screen.findByRole('option', { name: 'EEE' }));
+    expect(screen.getByLabelText('Batch')).toHaveValue('');
+    // Changing the university resets department and batch.
+    await user.clear(screen.getByLabelText('University'));
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'University of Dhaka' }));
+    expect(screen.getByLabelText('Department')).toHaveValue('');
+    expect(screen.getByLabelText('Batch')).toHaveValue('');
+    expect(calls.some((c) => c.url === '/api/public/departments?universityId=2')).toBe(true);
+  });
+  it('a slow response for the previous university never overwrites the current dropdown', async () => {
+    let resolveMu: (v: Response) => void;
+    const muDepts = new Promise<Response>((res) => { resolveMu = res; });
+    route = (url: string) => {
+      if (url === '/api/public/universities') return catalog(url);
+      if (url === '/api/public/departments?universityId=1') return muDepts;
+      if (url === '/api/public/departments?universityId=2') return catalog(url);
+      return catalog(url);
+    };
+    const user = userEvent.setup();
+    await toStep1(user);
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
+    // Switch university before MU's departments arrive. (The searchable
+    // select filters by the current value, so clear the text first.)
+    await user.clear(screen.getByLabelText('University'));
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'University of Dhaka' }));
+    await user.click(screen.getByLabelText('Department'));
+    await screen.findByRole('option', { name: 'Physics' });
+    // MU's slow response arrives now — it must not leak into the DU list.
+    resolveMu!(json([{ id: 10, universityId: 1, name: 'CSE' }]));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole('option', { name: 'CSE' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'Physics' })).toBeInTheDocument();
   });
 });
 

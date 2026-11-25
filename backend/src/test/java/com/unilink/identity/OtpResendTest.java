@@ -74,25 +74,28 @@ class OtpResendTest {
       .andExpect(jsonPath("$.status").value("OTP resent"));
     assertTrue(TestProviders.SMS_OTPS.isEmpty(), "no OTP may be sent for an already-verified phone");
   }
-  /** Fix 8: registration seeds the resend cooldown, so an immediate resend
-   *  after sign-up is rejected with 429. */
-  @Test void registerSeedsResendCooldown() throws Exception {
+  /** D-173 (owner brief 2026-11-25): registration no longer sends a phone
+   *  OTP — the journey is OCR → email OTP code — so there is no cooldown
+   *  to seed. The legacy phone flow is still available on demand: a
+   *  resend right after sign-up succeeds and sends a code. */
+  @Test void registerSendsNoPhoneOtpButResendWorks() throws Exception {
     var f = factory.seedMaster();
     String email = "otp-reg-" + System.nanoTime() + "@example.com";
     // Real PNG magic bytes: UploadValidator sniffs content, junk bytes are rejected.
     byte[] png = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 1, 2, 3, 4};
     MockMultipartFile idCard = new MockMultipartFile("idCard", "id.jpg", "image/jpeg", png);
-    MockMultipartFile photo = new MockMultipartFile("profilePhoto", "photo.jpg", "image/jpeg", png);
-    String body = mvc.perform(multipart("/api/auth/register").file(idCard).file(photo)
+    String body = mvc.perform(multipart("/api/auth/register").file(idCard)
         .param("fullName", "Test User").param("phone", "01712345678").param("email", email)
         .param("universityId", f.mu().getId().toString()).param("departmentId", f.muCse().getId().toString())
         .param("address", "123 Test Road").param("studentId", "CSE-" + System.nanoTime()).param("password", "Password1"))
       .andExpect(status().isCreated())
       .andReturn().getResponse().getContentAsString();
+    assertTrue(TestProviders.SMS_OTPS.isEmpty(), "registration must not send a phone OTP");
     long userId = Long.parseLong(body.replaceAll(".*\"id\"\\s*:\\s*(\\d+).*", "$1"));
     mvc.perform(post("/api/auth/otp/resend").contentType(MediaType.APPLICATION_JSON)
         .content("{\"userId\":" + userId + "}"))
-      .andExpect(status().isTooManyRequests());
+      .andExpect(status().isOk());
+    assertTrue(TestProviders.SMS_OTPS.containsKey("01712345678"), "the resend must send a phone OTP on demand");
   }
   @Test void registerRejectsBadPhoneWith422() throws Exception {
     var f = factory.seedMaster();

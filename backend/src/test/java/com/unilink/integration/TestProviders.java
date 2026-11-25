@@ -22,8 +22,17 @@ public class TestProviders {
     };
   }
   @Bean @Primary public OcrProvider fakeOcrProvider(){
-    return (bytes, fileName, fullName, studentId) ->
-      new OcrProvider.Result(fullName+" "+studentId+" ID CARD", 0.95, "DONE");
+    // Simulates a card that prints the registered data: full name,
+    // student ID and university name (D-180 — the matcher needs all
+    // three for AUTO_VERIFIED). Confidence is high, as for a clear card.
+    return new OcrProvider(){
+      @Override public Result extract(byte[] bytes, String fileName, String fullName, String studentId){
+        return new Result(fullName+" "+studentId+" ID CARD", 0.95, "DONE", 95.0);
+      }
+      @Override public Result extract(byte[] bytes, String fileName, String fullName, String studentId, String universityName){
+        return new Result(fullName+" "+studentId+" "+(universityName==null?"":universityName)+" ID CARD", 0.95, "DONE", 95.0);
+      }
+    };
   }
   public static void reset(){ SMS_OTPS.clear(); EMAIL_OTPS.clear(); EMAIL_LINKS.clear(); SIMPLE_EMAILS.clear(); }
 }

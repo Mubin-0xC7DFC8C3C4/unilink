@@ -61,6 +61,24 @@ public class AuthController {
     return auth.resendEmailVerificationLink(r.userId(), r.email(), ipResolver.resolve(req));
   }
   @GetMapping("/api/auth/verify-email") public UserDto verifyEmail(@RequestParam String token){ return auth.verifyEmailByToken(token); }
+  /** Registration-status lookup (D-175): scoped by the registration token
+   *  returned at sign-up / resubmit — no session and no user id. The
+   *  response carries no email or name, so it cannot enumerate accounts. */
+  @GetMapping("/api/auth/registration/status") public RegistrationStatusDto registrationStatus(@RequestParam String token){
+    return auth.registrationStatus(token);
+  }
+  /** Resend the 6-digit email OTP code (D-174). Generic 200 for an
+   *  already-verified email (see AuthService) — it must not reveal
+   *  whether the account or the email exists. */
+  @PostMapping("/api/auth/email-otp/resend") public Map<String,String> resendEmailOtp(@Valid @RequestBody EmailOtpResendRequest r, HttpServletRequest req){
+    return auth.resendEmailOtp(r.token(), ipResolver.resolve(req));
+  }
+  /** Verify the 6-digit email OTP code (D-174/D-176). Activates an
+   *  auto-verified account; creates no session and does not log the user
+   *  in — the frontend sends the student to /login explicitly. */
+  @PostMapping("/api/auth/email-otp/verify") public EmailOtpVerifyResponse verifyEmailOtp(@Valid @RequestBody EmailOtpVerifyRequest r){
+    return auth.verifyEmailOtp(r.token(), r.otp());
+  }
   @PostMapping("/api/auth/login") public UserDto login(@Valid @RequestBody LoginRequest r, HttpServletRequest req, HttpServletResponse res){
     Authentication a = auth.login(r.email(), r.password(), ipResolver.resolve(req));
     saveAuth(req, res, a);
