@@ -1,12 +1,14 @@
 import { useState } from 'react';
 
-export interface SearchableOption { id: number; name: string }
+export interface SearchableOption { id: number; name: string; /** D-198: extra text the filter matches on (shortName, aliases) — the displayed name stays `name`. */ searchText?: string }
 
 /** Searchable single-select over an existing catalogue (Phase 2.2, owner
  *  instruction 2026-11-20). The options always come from the caller — in
  *  Sign Up they are the live /public catalogue responses, never a hardcoded
  *  list — and picking from the filtered list is the only way to set a value,
- *  so a selection is always a real catalogue id. */
+ *  so a selection is always a real catalogue id. D-198: the filter matches
+ *  name + searchText, so typing "CSE" finds "Computer Science and
+ *  Engineering" and typing "MU" finds "Metropolitan University". */
 export function SearchableSelect({ id, options, value, onChange, placeholder = 'Search and select…', disabled = false, invalid = false, ariaDescribedBy }: {
   id: string;
   options: SearchableOption[];
@@ -20,7 +22,7 @@ export function SearchableSelect({ id, options, value, onChange, placeholder = '
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const selected = options.find((o) => o.id === value);
-  const shown = options.filter((o) => o.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const shown = options.filter((o) => `${o.name} ${o.searchText ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()));
   const pick = (o: SearchableOption) => { onChange(o.id); setOpen(false); setQuery(''); };
   // Layering (owner polish, 2026-11-20): while open, the wrapper and its
   // list sit above the fields that follow; picking an option closes the

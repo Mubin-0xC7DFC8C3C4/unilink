@@ -11,7 +11,7 @@ public class PublicController {
   public PublicController(PublicCatalogService catalog){ this.catalog=catalog; }
   @GetMapping("/universities") public List<UniversityDto> universities(){ return catalog.universities(); }
   @GetMapping("/departments") public List<DepartmentDto> departments(@RequestParam Long universityId){ return catalog.departments(universityId); }
-  @GetMapping("/department-catalog") public List<DepartmentCatalogDto> catalog(){ return catalog.catalog(); }
+  @GetMapping("/department-catalog") public List<DepartmentCatalogDto> catalog(@RequestParam(required=false) String q){ return catalog.catalog(q); }
   @GetMapping("/batches") public List<BatchDto> batches(@RequestParam Long universityId, @RequestParam(required=false) Long departmentId){
     return catalog.batches(universityId, departmentId);
   }

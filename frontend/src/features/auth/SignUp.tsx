@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'; import { useForm } from 'react-hook-form'; import { z } from 'zod'; import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom'; import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiGet, apiPost, errorMessage } from '../../api/client';
-import { BD_PHONE_MESSAGE, BD_PHONE_RE, type CatalogDepartment, type CatalogUniversity } from '../../api/types';
+import { BD_PHONE_MESSAGE, BD_PHONE_RE, type CatalogDepartment, type CatalogDepartmentCatalog, type CatalogUniversity } from '../../api/types';
 import { Button, Field, Input, PageHeader } from '../../design/primitives';
 import { SearchableSelect } from './SearchableSelect';
 /** FR-AUTH-01/02 (owner brief 2026-11-25 §1/§2): the ten registration
@@ -90,6 +90,13 @@ export default function SignUp(){
   const universityId = watch('universityId'); const departmentId = watch('departmentId'); const departmentLabel = watch('departmentLabel');
   const unis = useQuery({ queryKey: ['catalog-universities'], queryFn: () => apiGet<CatalogUniversity[]>('/public/universities'), ...catalogRetry });
   const depts = useQuery({ queryKey: ['catalog-departments', universityId], queryFn: () => apiGet<CatalogDepartment[]>(`/public/departments?universityId=${universityId}`), enabled: universityId !== undefined, ...catalogRetry });
+  // D-198: "search all departments" — the global catalog as a suggestion
+  // source for a university with no verified link row. Picking a catalog
+  // entry types its name into the department label verbatim (no
+  // departments row is ever auto-created from a student pick); an admin
+  // promotes it through master data. Fetched only while the panel is open.
+  const [showCatalogSearch, setShowCatalogSearch] = useState(false);
+  const catalogAll = useQuery({ queryKey: ['catalog-departments-all'], queryFn: () => apiGet<CatalogDepartmentCatalog[]>('/public/department-catalog'), enabled: showCatalogSearch, ...catalogRetry });
   // While the catalogue is still loading after 10 s the server is almost
   // certainly waking up — say so, instead of a silent spinner.
   const [wakeHint, setWakeHint] = useState(false);
@@ -196,6 +203,11 @@ export default function SignUp(){
     if (other) setCatalog('departmentId', undefined);
     else setValue('departmentLabel', undefined as never);
   };
+  const pickCatalogDept = (id: number | undefined) => {
+    const row = (catalogAll.data || []).find((c) => c.id === id);
+    if (!row) return;
+    setDeptOther(true); setValue('departmentLabel', row.name); setDeptError(undefined); setShowCatalogSearch(false);
+  };
   const STEP_LEADS = ['Your full name and student ID must match your student ID card. After submitting, we verify your ID automatically, then send a code to your personal email.', 'Select your university and department, then type your batch/session.', 'Your student ID, ID card photos and password.'];
   const fullName = watch('fullName'); const phone = watch('phone'); const email = watch('email'); const address = watch('address'); const studentId = watch('studentId'); const batch = watch('batch');
   return <div className="container" style={{ maxWidth: 640 }}><PageHeader eyebrow={`Sign up · Step ${step + 1} of 3`} title="Create your UniLink account" lead={STEP_LEADS[step]} />
@@ -214,17 +226,23 @@ export default function SignUp(){
     </>}
     {step === 1 && <>
       <Field label="University" error={errors.universityId?.message} valid={selectValid('universityId', universityId)} validText="Looks good" htmlFor="universityId">
-        <SearchableSelect id="universityId" options={(unis.data || []).map((u) => ({ id: u.id, name: u.name }))} value={universityId} placeholder="Search and select your university" onChange={pickUniversity} invalid={!!errors.universityId} ariaDescribedBy={errors.universityId ? 'universityId-error' : undefined} />
+        <SearchableSelect id="universityId" options={(unis.data || []).map((u) => ({ id: u.id, name: u.name, searchText: u.shortName ?? '' }))} value={universityId} placeholder="Search and select your university" onChange={pickUniversity} invalid={!!errors.universityId} ariaDescribedBy={errors.universityId ? 'universityId-error' : undefined} />
         {unis.isPending && wakeHint && <p className="body-sm secondary" role="status">The server is waking up — this can take a couple of minutes. The university list will appear automatically.</p>}
         {unis.isSuccess && (unis.data || []).length === 0 && <><p className="body-sm secondary" role="status">No universities are available right now.</p><button type="button" className="btn btn-sm" onClick={() => unis.refetch()}>Try again</button></>}
         {unis.isError && <><p className="field-error" role="alert">Could not load universities. The server may be waking up — it usually answers within a couple of minutes.</p><button type="button" className="btn btn-sm" onClick={() => unis.refetch()}>Try again</button></>}
       </Field>
       <Field label="Department" error={errors.departmentId?.message || errors.departmentLabel?.message || deptError} valid={deptChosen && !errors.departmentId && !errors.departmentLabel && !deptError} validText="Looks good" htmlFor={deptOther ? 'departmentLabel' : 'departmentId'}>
         {!deptOther ? <>
-          <SearchableSelect id="departmentId" options={(depts.data || []).map((d) => ({ id: d.id, name: d.name }))} value={departmentId} placeholder={universityId === undefined ? 'Select your university first' : 'Search and select your department'} disabled={universityId === undefined} onChange={pickDepartment} invalid={!!errors.departmentId || !!deptError} ariaDescribedBy={errors.departmentId || deptError ? 'departmentId-error' : undefined} />
+          <SearchableSelect id="departmentId" options={(depts.data || []).map((d) => ({ id: d.id, name: d.name, searchText: [d.shortName, ...(d.aliases || [])].filter(Boolean).join(' ') }))} value={departmentId} placeholder={universityId === undefined ? 'Select your university first' : 'Search and select your department'} disabled={universityId === undefined} onChange={pickDepartment} invalid={!!errors.departmentId || !!deptError} ariaDescribedBy={errors.departmentId || deptError ? 'departmentId-error' : undefined} />
           {depts.isError && <><p className="field-error" role="alert">Could not load departments. The server may be waking up — try again.</p><button type="button" className="btn btn-sm" onClick={() => depts.refetch()}>Try again</button></>}
           {universityId !== undefined && (depts.data || []).length === 0 && !depts.isPending && !depts.isError && <p className="body-sm secondary" role="status">No verified departments are listed for this university yet — you can type your department instead.</p>}
           <p style={{ margin: '8px 0 0' }}><button type="button" className="btn btn-sm" onClick={() => pickDeptOther(true)} disabled={universityId === undefined}>My department isn’t listed — type it instead</button></p>
+          <p style={{ margin: '8px 0 0' }}><button type="button" className="btn btn-sm" onClick={() => setShowCatalogSearch((v) => !v)} disabled={universityId === undefined}>Search all departments</button></p>
+          {showCatalogSearch && <>
+            <p className="body-sm secondary" style={{ margin: '6px 0 0' }}>Departments from the full catalogue — picking one types its name below, for an administrator to check. It does not add a verified department for your university.</p>
+            <SearchableSelect id="catalogDepartment" options={(catalogAll.data || []).map((c) => ({ id: c.id, name: c.name, searchText: [c.shortName, ...(c.aliases || [])].filter(Boolean).join(' ') }))} value={undefined} placeholder="Search all departments" onChange={pickCatalogDept} />
+            {catalogAll.isError && <><p className="field-error" role="alert">Could not load the department catalogue.</p><button type="button" className="btn btn-sm" onClick={() => catalogAll.refetch()}>Try again</button></>}
+          </>}
         </> : <>
           <Input id="departmentLabel" {...register('departmentLabel')} placeholder="e.g. Computer Science and Engineering" autoComplete="off" aria-invalid={!!errors.departmentLabel} aria-describedby={errors.departmentLabel ? 'departmentLabel-error' : undefined} />
           <p className="body-sm secondary" style={{ margin: '6px 0 0' }}>Type your department exactly as it appears on your ID card. It will be checked by an administrator.</p>

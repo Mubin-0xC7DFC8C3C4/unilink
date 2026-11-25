@@ -29,6 +29,8 @@ public class AdminController {
   public record ContentDecideBody(String targetType, Long targetId, String action, String reason) {}
   public record AnnouncementBody(String title, String body, String scope, Long universityId, java.time.LocalDateTime expiresAt) {}
   public record MasterBody(String name, String shortName, String emailDomains, Long universityId, Long catalogId, String category) {}
+  public record CatalogBody(String name, String shortName, java.util.List<String> aliases) {}
+  public record AliasBody(String alias) {}
   public record ModeratorBody(String email, Long universityId, String password) {}
   @GetMapping("/dashboard") public Map<String,Object> dashboard(Authentication a){ return admin.dashboard(admin(a)); }
   @GetMapping("/verification-queue") public List<VerificationRequestDto> queue(Authentication a, @RequestParam(required=false) String status){ return admin.verificationQueue(admin(a), status); }
@@ -162,6 +164,17 @@ public class AdminController {
   }
   @PostMapping("/master-data/departments") public DepartmentDto createDepartment(Authentication a, @RequestBody MasterBody b, HttpServletRequest req){
     return admin.createDepartment(admin(a), b.universityId(), b.catalogId(), b.name(), ip(req));
+  }
+  /** D-198: create a canonical department-catalog row (+ optional aliases),
+   *  so the catalogue can grow without a migration. Platform Admin only. */
+  @PostMapping("/master-data/department-catalog") public DepartmentCatalogDto createDepartmentCatalog(Authentication a, @RequestBody CatalogBody b, HttpServletRequest req){
+    return admin.createDepartmentCatalog(admin(a), b.name(), b.shortName(), b.aliases(), ip(req));
+  }
+  @PutMapping("/master-data/department-catalog/{id}") public DepartmentCatalogDto updateDepartmentCatalog(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){
+    return admin.updateDepartmentCatalog(admin(a), id, b.name(), b.shortName(), b.active(), ip(req));
+  }
+  @PostMapping("/master-data/department-catalog/{id}/aliases") public DepartmentCatalogDto addCatalogAlias(Authentication a, @PathVariable Long id, @RequestBody AliasBody b, HttpServletRequest req){
+    return admin.addCatalogAlias(admin(a), id, b.alias(), ip(req));
   }
   @PutMapping("/master-data/departments/{id}") public DepartmentDto updateDepartment(Authentication a, @PathVariable Long id, @RequestBody MasterUpdate b, HttpServletRequest req){
     return admin.updateDepartment(admin(a), id, b.name(), b.active(), ip(req));

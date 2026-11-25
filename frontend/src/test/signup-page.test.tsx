@@ -33,7 +33,6 @@ beforeEach(() => {
     if (url === '/api/auth/me') return json({ message: 'unauthenticated' }, 401);
     if (url === '/api/public/universities') return json([{ id: 1, name: 'Metropolitan University' }, { id: 2, name: 'University of Dhaka' }]);
     if (url.startsWith('/api/public/departments')) return json([{ id: 10, universityId: 1, name: 'CSE' }]);
-    if (url.startsWith('/api/public/batches')) return json([{ id: 100, universityId: 1, departmentId: 10, label: '45' }]);
     if (url === '/api/auth/register' && method === 'POST') return json({ id: 42, verificationToken: 'tok-42' }, 201);
     return json({ message: 'no mock route for ' + url }, 404);
   });
@@ -218,5 +217,98 @@ describe('SignUp page (2026-11-25 upgrade)', () => {
     expect(fd.get('departmentId')).toBe('10');
     expect(fd.get('profilePhoto')).toBeNull();
     expect(sessionStorage.getItem('unilink:verificationToken')).toBe('tok-42');
+  });
+
+  // ---- D-198: department catalogue search (shortName + aliases) ----
+  // The default mock above has no shortName/aliases, so these tests
+  // override fetch with catalogue rows that carry them.
+  function mockCatalogs(depts: unknown, catalog: unknown) {
+    fetchMock.mockImplementation(async (input: unknown, init?: { method?: string; body?: unknown }) => {
+      const url = String(input); const method = init?.method || 'GET';
+      calls.push({ url, method, body: init?.body });
+      if (url === '/api/csrf') return json({});
+      if (url === '/api/auth/me') return json({ message: 'unauthenticated' }, 401);
+      if (url === '/api/public/universities') return json([{ id: 1, name: 'Metropolitan University', shortName: 'MU' }, { id: 2, name: 'University of Dhaka', shortName: 'DU' }]);
+      if (url.startsWith('/api/public/departments')) return json(depts);
+      if (url === '/api/public/department-catalog') return json(catalog);
+      if (url === '/api/auth/register' && method === 'POST') return json({ id: 42, verificationToken: 'tok-42' }, 201);
+      return json({ message: 'no mock route for ' + url }, 404);
+    });
+  }
+  async function toStep2(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText('Full name'), 'Test User');
+    await user.type(screen.getByLabelText('Phone'), '01712345678');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await user.click(screen.getByLabelText('University'));
+    await user.click(await screen.findByRole('option', { name: 'Metropolitan University' }));
+  }
+  const MU_DEPTS = [
+    { id: 10, universityId: 1, catalogId: 1, name: 'Computer Science and Engineering', shortName: 'CSE', aliases: ['Computer Science'] },
+    { id: 11, universityId: 1, catalogId: 2, name: 'Electrical and Electronic Engineering', shortName: 'EEE', aliases: ['Electrical Engineering'] },
+  ];
+  const CATALOG = [
+    { id: 1, name: 'Software Engineering', shortName: 'SWE', aliases: ['Software Engg'] },
+    { id: 2, name: 'Civil Engineering', shortName: 'Civil', aliases: [] },
+  ];
+
+  it('typing "MU" finds Metropolitan University', async () => {
+    mockCatalogs(MU_DEPTS, CATALOG);
+    const user = userEvent.setup(); renderPage();
+    await user.type(screen.getByLabelText('Full name'), 'Test User');
+    await user.type(screen.getByLabelText('Phone'), '01712345678');
+    await user.type(screen.getByLabelText('Personal email'), 'test@example.com');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await user.click(screen.getByLabelText('University'));
+    await screen.findByRole('option', { name: 'Metropolitan University' });
+    await user.type(screen.getByLabelText('University'), 'MU');
+    expect(screen.getByRole('option', { name: 'Metropolitan University' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'University of Dhaka' })).toBeNull();
+  });
+
+  it('typing "CSE" finds "Computer Science and Engineering"', async () => {
+    mockCatalogs(MU_DEPTS, CATALOG);
+    const user = userEvent.setup(); renderPage();
+    await toStep2(user);
+    await user.click(screen.getByLabelText('Department'));
+    await screen.findByRole('option', { name: 'Computer Science and Engineering' });
+    await user.type(screen.getByLabelText('Department'), 'CSE');
+    expect(screen.getByRole('option', { name: 'Computer Science and Engineering' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Electrical and Electronic Engineering' })).toBeNull();
+  });
+
+  it('typing an alias finds the department', async () => {
+    mockCatalogs(MU_DEPTS, CATALOG);
+    const user = userEvent.setup(); renderPage();
+    await toStep2(user);
+    await user.click(screen.getByLabelText('Department'));
+    await screen.findByRole('option', { name: 'Electrical and Electronic Engineering' });
+    await user.type(screen.getByLabelText('Department'), 'Electrical Engineering');
+    expect(screen.getByRole('option', { name: 'Electrical and Electronic Engineering' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Computer Science and Engineering' })).toBeNull();
+  });
+
+  it('an empty per-university list still offers the typed fallback', async () => {
+    mockCatalogs([], CATALOG);
+    const user = userEvent.setup(); renderPage();
+    await toStep2(user);
+    await screen.findByText('No verified departments are listed for this university yet — you can type your department instead.');
+    await user.click(screen.getByRole('button', { name: /type it instead/ }));
+    await user.type(screen.getByLabelText('Department'), 'Robotics and Mechatronics');
+    await user.type(screen.getByLabelText('Batch / Session'), 'Fall 2024');
+    await user.type(screen.getByLabelText('Your address'), '123 Test Road, Dhaka');
+    await user.click(screen.getByRole('button', { name: /Continue/ }));
+    await screen.findByLabelText('Student ID number');
+  });
+
+  it('"search all departments" types the picked catalog name as the label', async () => {
+    mockCatalogs([], CATALOG);
+    const user = userEvent.setup(); renderPage();
+    await toStep2(user);
+    await user.click(screen.getByRole('button', { name: 'Search all departments' }));
+    await user.click(screen.getByPlaceholderText('Search all departments'));
+    await user.type(screen.getByPlaceholderText('Search all departments'), 'SWE');
+    await user.click(await screen.findByRole('option', { name: 'Software Engineering' }));
+    expect(screen.getByLabelText('Department')).toHaveValue('Software Engineering');
   });
 });

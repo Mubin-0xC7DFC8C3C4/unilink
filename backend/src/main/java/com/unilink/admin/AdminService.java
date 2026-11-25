@@ -20,6 +20,7 @@ public class AdminService {
   private final AdminAccountRepository admins; private final AuditLogRepository auditLogs;
   private final AnnouncementRepository announcements; private final UniversityRepository universities;
   private final DepartmentRepository departments; private final DepartmentCatalogRepository catalogs;
+  private final DepartmentAliasRepository aliases;
   private final BatchRepository batches; private final SectorTagRepository sectors;
   private final AppealRepository appeals; private final SuspensionRecommendationRepository recommendations;
   private final AdminAlertRepository alerts; private final JdbcTemplate jdbc; private final AuditService audit;
@@ -34,7 +35,7 @@ public class AdminService {
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
       AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
-      DepartmentCatalogRepository catalogs, BatchRepository batches, SectorTagRepository sectors,
+      DepartmentCatalogRepository catalogs, DepartmentAliasRepository aliases, BatchRepository batches, SectorTagRepository sectors,
       AppealRepository appeals, SuspensionRecommendationRepository recommendations, AdminAlertRepository alerts,
       JdbcTemplate jdbc, AuditService audit, AccessPolicy policy, PasswordEncoder encoder, SessionService sessions,
       UserCredentialRepository creds, VerificationAttemptRepository attempts,
@@ -46,7 +47,7 @@ public class AdminService {
     this.postSectors=postSectors; this.eventResponses=eventResponses; this.notifications=notifications;
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
-    this.departments=departments; this.catalogs=catalogs; this.batches=batches; this.sectors=sectors;
+    this.departments=departments; this.catalogs=catalogs; this.aliases=aliases; this.batches=batches; this.sectors=sectors;
     this.appeals=appeals; this.recommendations=recommendations; this.alerts=alerts; this.jdbc=jdbc; this.audit=audit;
     this.policy=policy; this.encoder=encoder; this.sessions=sessions; this.creds=creds; this.attempts=attempts;
     this.totpSecrets=totpSecrets;
@@ -407,7 +408,67 @@ public class AdminService {
     if (departments.findByUniversityIdAndCatalogId(universityId, catalogId).isPresent())
       throw new Exceptions.Conflict("DEPARTMENT_EXISTS","This university already has a department for that catalog entry");
     Department d = new Department(); d.setUniversityId(universityId); d.setCatalogId(catalogId); d.setName(name); d.setActive(true);
-    d = departments.save(d); audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT",d.getId(),null,Map.of(),ip); return DepartmentDto.from(d);
+    d = departments.save(d); audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT",d.getId(),null,Map.of(),ip); return enrichedDepartment(d);
+  }
+  /** D-198: create a canonical department-catalog row (+ optional aliases)
+   *  so the catalogue can grow without a migration. Platform Admin only.
+   *  Duplicate name or duplicate alias (globally unique) is a 409, not a
+   *  500 from the unique key (D-149 pattern). */
+  @Transactional public DepartmentCatalogDto createDepartmentCatalog(Principals.AdminPrincipal admin, String name, String shortName, List<String> aliasList, String ip){
+    policy.requirePlatformAdmin(admin);
+    if (name==null || name.isBlank()) throw new Exceptions.BadRequest("NAME_REQUIRED","A department catalog entry needs a name");
+    if (catalogs.findByName(name.trim()).isPresent())
+      throw new Exceptions.Conflict("CATALOG_EXISTS","A department catalog entry with this name already exists");
+    List<String> cleanAliases = cleanAliases(aliasList);
+    for (String a : cleanAliases) {
+      if (aliases.existsByAliasIgnoreCase(a))
+        throw new Exceptions.Conflict("ALIAS_EXISTS","Alias '"+a+"' is already used by another department");
+    }
+    DepartmentCatalog c = new DepartmentCatalog(); c.setName(name.trim()); c.setShortName(shortName); c.setActive(true);
+    c = catalogs.save(c);
+    for (String a : cleanAliases) { DepartmentAlias row = new DepartmentAlias(); row.setCatalogId(c.getId()); row.setAlias(a); row.setActive(true); aliases.save(row); }
+    audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT_CATALOG",c.getId(),null,Map.of(),ip);
+    return DepartmentCatalogDto.from(c, cleanAliases);
+  }
+  /** D-198: add one alias to an existing catalog row. Alias is globally
+   *  unique: a duplicate (case-insensitive) is a 409. */
+  @Transactional public DepartmentCatalogDto addCatalogAlias(Principals.AdminPrincipal admin, Long catalogId, String alias, String ip){
+    policy.requirePlatformAdmin(admin);
+    DepartmentCatalog c = catalogs.findById(catalogId).orElseThrow(() -> new Exceptions.NotFound("Department catalog"));
+    if (alias==null || alias.isBlank()) throw new Exceptions.BadRequest("ALIAS_REQUIRED","An alias is required");
+    if (aliases.existsByAliasIgnoreCase(alias.trim()))
+      throw new Exceptions.Conflict("ALIAS_EXISTS","Alias '"+alias.trim()+"' is already used by another department");
+    DepartmentAlias row = new DepartmentAlias(); row.setCatalogId(c.getId()); row.setAlias(alias.trim()); row.setActive(true); aliases.save(row);
+    audit.write(admin.adminId(),"MASTERDATA_CREATE","DEPARTMENT_ALIAS",row.getId(),null,Map.of("catalogId", c.getId()),ip);
+    return enrichedCatalog(c);
+  }
+  @Transactional public DepartmentCatalogDto updateDepartmentCatalog(Principals.AdminPrincipal admin, Long id, String name, String shortName, Boolean active, String ip){
+    policy.requirePlatformAdmin(admin);
+    if (name!=null && name.isBlank()) throw new Exceptions.BadRequest("NAME_REQUIRED","A department catalog entry needs a name");
+    DepartmentCatalog c = catalogs.findById(id).orElseThrow(() -> new Exceptions.NotFound("Department catalog"));
+    if (name!=null && !name.equals(c.getName()) && catalogs.findByName(name).isPresent())
+      throw new Exceptions.Conflict("CATALOG_EXISTS","A department catalog entry with this name already exists");
+    if (name!=null) c.setName(name);
+    if (shortName!=null) c.setShortName(shortName);
+    if (active!=null) c.setActive(active);
+    catalogs.save(c);
+    audit.write(admin.adminId(),"MASTERDATA_UPDATE","DEPARTMENT_CATALOG",id,null,Map.of(),ip);
+    return enrichedCatalog(c);
+  }
+  private DepartmentCatalogDto enrichedCatalog(DepartmentCatalog c){
+    List<String> names = aliases.findByCatalogIdAndActiveTrue(c.getId()).stream().map(DepartmentAlias::getAlias).toList();
+    return DepartmentCatalogDto.from(c, names);
+  }
+  private DepartmentDto enrichedDepartment(Department d){
+    String shortName = d.getCatalogId()==null ? null
+        : catalogs.findById(d.getCatalogId()).map(DepartmentCatalog::getShortName).orElse(null);
+    List<String> names = d.getCatalogId()==null ? List.of()
+        : aliases.findByCatalogIdAndActiveTrue(d.getCatalogId()).stream().map(DepartmentAlias::getAlias).toList();
+    return DepartmentDto.from(d, shortName, names);
+  }
+  private static List<String> cleanAliases(List<String> aliasList){
+    if (aliasList==null) return List.of();
+    return aliasList.stream().filter(Objects::nonNull).map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
   }
   @Transactional public SectorTagDto createSector(Principals.AdminPrincipal admin, String name, String ip){
     policy.requirePlatformAdmin(admin);
@@ -567,7 +628,7 @@ public class AdminService {
     if (active!=null) d.setActive(active);
     departments.save(d);
     audit.write(admin.adminId(),"MASTERDATA_UPDATE","DEPARTMENT",id,null,Map.of(),ip);
-    return DepartmentDto.from(d);
+    return enrichedDepartment(d);
   }
   @Transactional
   public SectorTagDto updateSector(Principals.AdminPrincipal admin, Long id, String name, Boolean active, String ip){
@@ -616,6 +677,7 @@ public class AdminService {
     switch (kind){
       case "universities" -> { University u = universities.findById(id).orElseThrow(() -> new Exceptions.NotFound("University")); u.setActive(false); universities.save(u); }
       case "departments" -> { Department d = departments.findById(id).orElseThrow(() -> new Exceptions.NotFound("Department")); d.setActive(false); departments.save(d); }
+      case "department-catalog" -> { DepartmentCatalog c = catalogs.findById(id).orElseThrow(() -> new Exceptions.NotFound("Department catalog")); c.setActive(false); catalogs.save(c); }
       case "sectors" -> { SectorTag s = sectors.findById(id).orElseThrow(() -> new Exceptions.NotFound("Sector")); s.setActive(false); sectors.save(s); }
       case "batches" -> { Batch b = batches.findById(id).orElseThrow(() -> new Exceptions.NotFound("Batch")); b.setActive(false); batches.save(b); }
       default -> throw new Exceptions.BadRequest("INVALID_KIND","Unknown master-data kind");
