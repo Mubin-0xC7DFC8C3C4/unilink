@@ -472,4 +472,15 @@ public class IdCardMatcher {
     if (regPlaces.isEmpty() || ocrPlaces.isEmpty()) return false;
     return Collections.disjoint(regPlaces, ocrPlaces);
   }
+
+  /** D-203 (folded in from Slice A): recompute Decision.addressConflict
+   *  for the admin queue from the STORED OCR texts and the entered address.
+   *  The flag was never persisted (no column; display-only, no migration),
+   *  so the queue derives it at read time with the same gazetteer rule the
+   *  matcher used. False when either side names no gazetteer place. */
+  public static boolean addressConflictFor(String frontText, String backText, String address){
+    Set<String> ocrTokens = new HashSet<>(tokens(frontText));
+    ocrTokens.addAll(tokens(backText));
+    return addressConflict(ocrTokens, address);
+  }
 }

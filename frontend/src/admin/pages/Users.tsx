@@ -42,6 +42,9 @@ export default function Users() {
   const unis = useQuery({ queryKey: ['public-universities'], queryFn: () => apiGet<any[]>('/public/universities'), retry: false });
   const depts = useQuery({ queryKey: ['public-departments', uniFilter], queryFn: () => apiGet<any[]>(`/public/departments?universityId=${uniFilter}`), retry: false, enabled: !!uniFilter });
   const detail = useQuery({ queryKey: ['admin-user', selectedId], queryFn: () => apiGet<any>(`/admin/users/${selectedId}`), retry: false, enabled: selectedId != null });
+  // D-204 (D): per-user activity — audit rows for this student (profile
+  // and photo/cover updates included) plus their login attempts.
+  const activityQ = useQuery({ queryKey: ['admin-user-activity', selectedId], queryFn: () => apiGet<any>(`/admin/users/${selectedId}/activity`), retry: false, enabled: selectedId != null });
   const recs = useQuery({ queryKey: ['admin-suspension-recs'], queryFn: () => apiGet<any[]>('/admin/suspension-recommendations'), retry: false, enabled: isPlatformAdmin });
 
   const uniName = useMemo(() => { const m = new Map<number, string>(); (unis.data ?? []).forEach((u: any) => m.set(u.id, u.name)); return m; }, [unis.data]);
@@ -146,6 +149,25 @@ export default function Users() {
             <div className="row"><span>Address</span><span>{sel.address || '—'}</span></div>
             <div className="row"><span>Verification status</span><span><StatusBadge status={sel.state} /></span></div>
             <div className="row"><span>Registered</span><span>{fmtDateTime(sel.createdAt)}</span></div>
+            <h3 style={{ marginTop: 16 }}>Activity</h3>
+            {activityQ.isPending ? <Skeleton /> : activityQ.isError ? <p className="secondary">Activity could not be loaded.</p> : <>
+              {(activityQ.data?.auditLogs ?? []).length === 0 && (activityQ.data?.loginAttempts ?? []).length === 0
+                ? <p className="secondary">No recorded activity for this student yet.</p>
+                : <>
+                  {(activityQ.data?.auditLogs ?? []).length > 0 && <>
+                    <p style={{ margin: '8px 0 4px' }}><strong>Audit log</strong></p>
+                    {(activityQ.data.auditLogs as any[]).map((a: any) => (
+                      <div className="row" key={a.id}><span>{fmtDateTime(a.createdAt)}</span><span>{a.action}{a.reason ? ` — ${a.reason}` : ''}</span></div>
+                    ))}
+                  </>}
+                  {(activityQ.data?.loginAttempts ?? []).length > 0 && <>
+                    <p style={{ margin: '12px 0 4px' }}><strong>Login attempts</strong></p>
+                    {(activityQ.data.loginAttempts as any[]).map((a: any, i: number) => (
+                      <div className="row" key={a.id ?? i}><span>{fmtDateTime(a.createdAt)}</span><span>{a.success ? 'Success' : 'Failed'}{a.ip ? ` · ${a.ip}` : ''}</span></div>
+                    ))}
+                  </>}
+                </>}
+            </>}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
               {actionButtons(sel).map((b) => (
                 <Button key={b.action} variant={b.action === 'SUSPEND' || b.action === 'BAN' ? 'primary' : undefined} onClick={() => setConfirm({ action: b.action, user: sel })}>{b.label}</Button>

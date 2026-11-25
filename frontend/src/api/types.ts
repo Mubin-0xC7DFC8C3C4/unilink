@@ -7,7 +7,7 @@ export interface EventItem { id: string|number; title: string; type?: string; de
 export interface UserProfile { id: string|number; userId?: number; fullName: string; email?: string; university?: string; department?: string; batch?: string; verified?: boolean; bio?: string; skills?: string[]; phone?: string; state?: string; headline?: string; links?: string; sectors?: string[]; followers?: number; following?: number; isOwner?: boolean; universityName?: string; departmentName?: string; batchLabel?: string; hasPhoto?: boolean; hasCover?: boolean; phoneVisible?: boolean }
 export interface Room { id: string|number; name: string; type: string; lastMessage?: string }
 export interface NotificationItem { id: string|number; title: string; body?: string; message?: string; createdAt?: string; read?: boolean; readFlag?: boolean; type?: string }
-export interface VerificationItem { id: string|number; fullName: string; email: string; university?: string; studentId?: string; status?: string; submittedAt?: string; ocrMatchScore?: number; ocrText?: string; previousAttempts?: number; duplicatePhone?: boolean }
+export interface VerificationItem { id: string|number; fullName: string; email: string; university?: string; studentId?: string; status?: string; submittedAt?: string; ocrMatchScore?: number; ocrText?: string; ocrTextBack?: string; ocrStatus?: string; previousAttempts?: number; duplicatePhone?: boolean; phoneVerifiedAt?: string; emailVerifiedAt?: string; addressConflict?: boolean }
 export const SECTORS = ['Software Engineering','Data Science','AI/ML','Cyber Security','Web Development','Competitive Programming'];
 export const LEVELS = ['DEPARTMENT','UNIVERSITY','HUB','NATIONAL'] as const;
 
@@ -19,7 +19,7 @@ export interface AttachmentItem { id: string|number; fileName: string; contentTy
 export interface CommunityContext { universityId?: number; universityName?: string; departmentId?: number; departmentName?: string; catalogId?: number; departmentRoomPublicId?: string; universityRoomPublicId?: string }
 /** Notification types the backend actually emits (NotificationEventListener + ConnectionService). */
 export const NOTIFICATION_TYPES = ['VERIFICATION_DECISION','REPORT_AUTO_HIDE','TEAM_JOIN_ACCEPTED','CONNECTION_REQUEST','CONNECTION_ACCEPTED','CONNECTION_REJECTED'] as const;
-export interface ProjectItem { id: string|number; title?: string; description?: string; url?: string }
+export interface ProjectItem { id: string|number; title?: string; description?: string; url?: string; githubOwner?: string; githubRepo?: string }
 export interface EducationItem { id: string|number; institution?: string; degree?: string; year?: number }
 export interface AchievementItem { id: string|number; title?: string; description?: string; year?: number }
 // --- END PHASE 2 NON-AUTH TYPES ---

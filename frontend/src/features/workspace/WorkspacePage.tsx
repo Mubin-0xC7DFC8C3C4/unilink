@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, apiGet, errorMessage } from '../../api/client';
+import { api, apiDelete, apiGet, apiPost, errorMessage } from '../../api/client';
 import { EmptyState, ErrorState, Skeleton } from '../../design/primitives';
 import { IconGitHub } from '../../design/icons';
 import { LiveRepoViewer } from './RepoViewer';
+import type { ProjectItem } from '../../api/types';
 
 const WS_CSS = `
 .ws2-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:28px;align-items:start;margin-top:8px}
@@ -35,15 +36,22 @@ const WS_CSS = `
 .repo-meta{display:flex;gap:16px;align-items:center;color:var(--text-secondary);font-size:.86rem;flex-wrap:wrap}
 .repo-dot{width:9px;height:9px;border-radius:50%;background:var(--text-secondary);display:inline-block;margin-right:5px}
 .repo-actions{display:flex;gap:8px;margin-top:12px}
+.pin-chooser{border:1px solid var(--border);border-radius:var(--radius-md);padding:16px;margin-bottom:16px;max-width:640px;background:var(--surface-muted)}
+.pin-chooser h3{margin:0 0 4px;font-size:1rem}
+.pin-chooser p{color:var(--text-secondary);margin:0 0 10px}
+.pin-chooser .repo-actions{margin-top:10px}
 @media (max-width:760px){.ws2-layout{grid-template-columns:1fr}.ws2-side{border-right:none;padding-right:0}}
 `;
 
 type GhRepo = { owner: string; name: string; fullName: string; description?: string; language?: string; stars: number; forks: number };
 
-function RepoCard({ repo, onOpen }: { repo: GhRepo; onOpen: (r: GhRepo) => void }) {
+function RepoCard({ repo, pinned, onOpen, onPin, onUnpin, busy }: {
+  repo: GhRepo; pinned: boolean; onOpen: (r: GhRepo) => void;
+  onPin: (r: GhRepo) => void; onUnpin: () => void; busy: boolean;
+}) {
   return (
     <article className="repo-card">
-      <h3><button type="button" className="repo-title-btn" onClick={() => onOpen(repo)}>{repo.owner} / {repo.name}</button><span className="repo-pill">Public</span></h3>
+      <h3><button type="button" className="repo-title-btn" onClick={() => onOpen(repo)}>{repo.owner} / {repo.name}</button><span className="repo-pill">Public</span>{pinned && <span className="repo-pill">Pinned to profile</span>}</h3>
       {repo.description && <p>{repo.description}</p>}
       <div className="repo-meta">
         {repo.language && <span><span className="repo-dot" aria-hidden="true" />{repo.language}</span>}
@@ -52,6 +60,9 @@ function RepoCard({ repo, onOpen }: { repo: GhRepo; onOpen: (r: GhRepo) => void 
       </div>
       <div className="repo-actions">
         <button type="button" className="btn btn-sm" onClick={() => onOpen(repo)}>View details</button>
+        {pinned
+          ? <button type="button" className="btn btn-sm" disabled={busy} onClick={onUnpin}>Unpin from profile</button>
+          : <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onPin(repo)}>Pin to Profile</button>}
       </div>
     </article>
   );
@@ -73,6 +84,8 @@ export default function WorkspacePage() {
   const [view, setView] = useState<'overview' | 'projects'>('overview');
   const [openRepo, setOpenRepo] = useState<GhRepo | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  // D-203: which repository the student is choosing a project row for.
+  const [pinTarget, setPinTarget] = useState<GhRepo | null>(null);
   const returnNote = new URLSearchParams(location.search).get('github');
 
   const status = useQuery({ queryKey: ['github-status'], queryFn: () => apiGet<any>('/workspace/github/status'), retry: false });
@@ -82,6 +95,30 @@ export default function WorkspacePage() {
   const username = status.data?.username as string | undefined;
 
   const repos = useQuery({ queryKey: ['github-repos'], queryFn: () => apiGet<GhRepo[]>('/workspace/github/repos'), retry: false, enabled: connected });
+  // The student's own project rows (the pin targets). A failed load is
+  // treated as "no projects yet" — pinning can still create a new row.
+  const myProjects = useQuery({ queryKey: ['my-projects'], queryFn: () => apiGet<ProjectItem[]>('/profiles/me/projects'), retry: false, enabled: connected });
+  const projects = myProjects.data ?? [];
+  const pinnedFor = (r: GhRepo) => projects.find((p) => p.githubOwner === r.owner && p.githubRepo === r.name);
+  const pinMut = useMutation({
+    mutationFn: ({ projectId, repo }: { projectId: string | number; repo: GhRepo }) => apiPost(`/profiles/me/projects/${projectId}/pin`, { owner: repo.owner, repo: repo.name }),
+    onSuccess: () => { setPinTarget(null); void qc.invalidateQueries({ queryKey: ['my-projects'] }); },
+    onError: (e) => setAuthError(errorMessage(e)),
+  });
+  const createAndPin = useMutation({
+    mutationFn: async (repo: GhRepo) => {
+      const created = await apiPost<ProjectItem>('/profiles/me/projects', { title: repo.name, description: repo.description ?? '', url: `https://github.com/${repo.owner}/${repo.name}` });
+      return apiPost(`/profiles/me/projects/${created.id}/pin`, { owner: repo.owner, repo: repo.name });
+    },
+    onSuccess: () => { setPinTarget(null); void qc.invalidateQueries({ queryKey: ['my-projects'] }); },
+    onError: (e) => setAuthError(errorMessage(e)),
+  });
+  const unpinMut = useMutation({
+    mutationFn: (projectId: string | number) => apiDelete(`/profiles/me/projects/${projectId}/pin`),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['my-projects'] }); },
+    onError: (e) => setAuthError(errorMessage(e)),
+  });
+  const pinBusy = pinMut.isPending || createAndPin.isPending || unpinMut.isPending;
   const authorize = useMutation({
     mutationFn: () => apiGet<{ url: string }>('/workspace/github/authorize'),
     onSuccess: (d) => { window.location.assign(d.url); },
@@ -151,11 +188,31 @@ export default function WorkspacePage() {
               <h1 className="ws2-title">{view === 'overview' ? 'Your GitHub Workspace' : 'My Projects'}</h1>
               <div className="ws2-headrow">
                 <span className="ws2-pill"><IconGitHub size={16} /> Connected as @{username}</span>
-                <button type="button" className="btn btn-sm" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</button>
+                <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <a className="btn btn-sm" href="https://github.com/new" target="_blank" rel="noreferrer">Create Project on GitHub ↗</a>
+                  <button type="button" className="btn btn-sm" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</button>
+                </span>
               </div>
+              <p className="ws2-note" style={{ marginBottom: 14 }}>New repositories are created on GitHub (UniLink only reads public repositories) — a repository you make public appears here and can be pinned to your profile.</p>
+              {pinTarget && (
+                <section className="pin-chooser" aria-label={`Pin ${pinTarget.owner} / ${pinTarget.name} to profile`}>
+                  <h3>Pin {pinTarget.owner} / {pinTarget.name} to your profile</h3>
+                  <p>Choose one of your project rows, or create a new project from this repository.</p>
+                  <div className="repo-actions">
+                    {projects.filter((p) => !p.githubOwner).map((p) => (
+                      <button key={p.id} type="button" className="btn btn-sm" disabled={pinBusy} onClick={() => pinMut.mutate({ projectId: p.id, repo: pinTarget })}>{p.title || 'Untitled project'}</button>
+                    ))}
+                    <button type="button" className="btn btn-sm btn-primary" disabled={pinBusy} onClick={() => createAndPin.mutate(pinTarget)}>New project “{pinTarget.name}”</button>
+                    <button type="button" className="btn btn-sm" disabled={pinBusy} onClick={() => setPinTarget(null)}>Cancel</button>
+                  </div>
+                </section>
+              )}
               {repos.isPending ? <Skeleton /> : repos.isError ? <ErrorState message={errorMessage(repos.error)} onRetry={() => repos.refetch()} />
                 : (repos.data ?? []).length === 0 ? <EmptyState title="No public repositories" body="Repositories you make public on GitHub will appear here." />
-                : (repos.data ?? []).map((r) => <RepoCard key={r.fullName} repo={r} onOpen={setOpenRepo} />)}
+                : (repos.data ?? []).map((r) => {
+                    const pinned = pinnedFor(r);
+                    return <RepoCard key={r.fullName} repo={r} pinned={!!pinned} onOpen={setOpenRepo} onPin={setPinTarget} onUnpin={() => pinned && unpinMut.mutate(pinned.id)} busy={pinBusy} />;
+                  })}
               {view === 'projects' && <p className="ws2-note" style={{ marginTop: 8 }}>Repositories you add to <Link to="/profile/me">your profile</Link> open in the same viewer.</p>}
               {authError && <p role="alert" className="field-error">{authError}</p>}
             </>}

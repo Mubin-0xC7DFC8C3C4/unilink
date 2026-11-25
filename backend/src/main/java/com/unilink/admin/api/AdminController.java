@@ -33,7 +33,7 @@ public class AdminController {
   public record AliasBody(String alias) {}
   public record ModeratorBody(String email, Long universityId, String password) {}
   @GetMapping("/dashboard") public Map<String,Object> dashboard(Authentication a){ return admin.dashboard(admin(a)); }
-  @GetMapping("/verification-queue") public List<VerificationRequestDto> queue(Authentication a, @RequestParam(required=false) String status){ return admin.verificationQueue(admin(a), status); }
+  @GetMapping("/verification-queue") public List<VerificationRequestDto> queue(Authentication a, @RequestParam(required=false) String status, @RequestParam(required=false) String ocrStatus){ return admin.verificationQueue(admin(a), status, ocrStatus); }
   @PostMapping("/verification/{id}/approve") public VerificationRequestDto approve(Authentication a, @PathVariable Long id, HttpServletRequest req){
     return verification.approve(id, admin(a), ip(req));
   }
@@ -64,6 +64,26 @@ public class AdminController {
     return ResponseEntity.ok().contentType(MediaType.parseMediaType(uploads.sniffContentType(bytes, null)))
       .header("Cache-Control","no-store")
       .body(new ByteArrayResource(bytes));
+  }
+  /** D-204 (B): Login Activity — paginated login attempts (email, IP,
+   *  success, timestamp; never passwords/OTPs/tokens). */
+  @GetMapping("/login-attempts") public PageResult<LoginAttemptDto> loginAttempts(Authentication a, @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="50") int size){
+    return admin.loginAttempts(admin(a), page, size);
+  }
+  /** D-204 (C): all posts, reported or not, with author, content,
+   *  creation time, moderation status and report counts. */
+  @GetMapping("/posts") public PageResult<AdminPostDto> allPosts(Authentication a, @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="50") int size){
+    return admin.allPosts(admin(a), page, size);
+  }
+  /** D-204 (D): per-user activity — audit rows targeting the user plus
+   *  their login attempts. */
+  @GetMapping("/users/{id}/activity") public UserActivityDto userActivity(Authentication a, @PathVariable Long id){
+    return admin.userActivity(admin(a), id);
+  }
+  /** D-204 (F): audit chain verification surfaced to admins (counts plus
+   *  the first broken row id, if any). */
+  @GetMapping("/audit-logs/verify") public AuditVerifyDto auditVerify(Authentication a){
+    return admin.auditVerify(admin(a));
   }
   @GetMapping("/users") public List<AdminUserDto> users(Authentication a, @RequestParam(required=false) String q){ return admin.listUsers(admin(a), q); }
   /** Identity-change requests (FR-PROF-09, D-017): list + decide. */
@@ -200,8 +220,8 @@ public class AdminController {
     return admin.listModerators(admin(a));
   }
   public record ModeratorUpdate(String email, Long universityId, Boolean active) {}
-  @PutMapping("/moderators/{id}") public AdminAccountDto updateModerator(Authentication a, @PathVariable Long id, @RequestBody ModeratorUpdate b){
-    return admin.updateModerator(admin(a), id, b.email(), b.universityId(), b.active());
+  @PutMapping("/moderators/{id}") public AdminAccountDto updateModerator(Authentication a, @PathVariable Long id, @RequestBody ModeratorUpdate b, HttpServletRequest req){
+    return admin.updateModerator(admin(a), id, b.email(), b.universityId(), b.active(), ip(req));
   }
   @PostMapping("/moderators/{id}/reset-credentials") public AdminService.ResetCredentialsResult resetModeratorCredentials(Authentication a, @PathVariable Long id, HttpServletRequest req){
     return admin.resetModeratorCredentials(admin(a), id, ip(req));

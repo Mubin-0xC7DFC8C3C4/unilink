@@ -138,6 +138,17 @@ public class ProfileController {
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
     return service.updateProject(p.userId(), id, r.title(), r.description(), r.url());
   }
+  /** D-203: Pin to Profile — link a project row to one of the caller's own
+   *  public GitHub repositories (validated live against the GitHub API). */
+  public record PinBody(String owner, String repo) {}
+  @PostMapping("/me/projects/{id}/pin") public ProfileDtos.ProjectDto pinProject(Authentication a, @PathVariable Long id, @RequestBody PinBody b){
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
+    return service.pinProject(p.userId(), id, b.owner(), b.repo());
+  }
+  @DeleteMapping("/me/projects/{id}/pin") public ProfileDtos.ProjectDto unpinProject(Authentication a, @PathVariable Long id){
+    var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p);
+    return service.unpinProject(p.userId(), id);
+  }
   @DeleteMapping("/me/projects/{id}") public Map<String,String> deleteProject(Authentication a, @PathVariable Long id){
     var p = policy.requireStudent(a.getPrincipal()); policy.requireVerified(p); service.deleteProject(p.userId(), id); return Map.of("status","deleted");
   }

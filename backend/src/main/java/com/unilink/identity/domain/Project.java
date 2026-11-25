@@ -9,6 +9,10 @@ public class Project {
   @Lob
   @Column(name="description") private String description;
   @Column(name="url") private String url;
+  /** D-203: Pin to Profile — the GitHub repository this project is pinned
+   *  to. Both NULL = not pinned; both set = render via LiveRepoViewer. */
+  @Column(name="github_owner") private String githubOwner;
+  @Column(name="github_repo") private String githubRepo;
   @Column(name="created_at") private LocalDateTime createdAt;
   @PrePersist void onCreate(){ if(createdAt==null) createdAt=LocalDateTime.now(); }
 }

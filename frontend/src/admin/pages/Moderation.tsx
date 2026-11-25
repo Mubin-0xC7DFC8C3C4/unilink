@@ -12,8 +12,9 @@ import { ConfirmDialog, StatusBadge, Tabs, fmtDateTime } from '../adminUi';
  * targetId, action, reason} with actions HIDE / REMOVE / RESTORE /
  * EDIT_REQUEST and a mandatory reason. "Reports" shows the whole
  * queue; "Post Management" shows the post and event reports with the
- * same decision controls. There is no separate all-posts listing in
- * the admin API, so unreported posts are not listed here.
+ * same decision controls. Unreported posts live on the separate
+ * All Posts page (GET /admin/posts, D-204 C) — this queue is reports
+ * only, by design.
  */
 export default function Moderation() {
   const [params, setParams] = useSearchParams();

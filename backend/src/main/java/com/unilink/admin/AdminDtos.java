@@ -13,13 +13,18 @@ public final class AdminDtos {
                              LocalDateTime createdAt, LocalDateTime updatedAt){
     public static AdminUserDto from(User u){ return new AdminUserDto(u.getId(), u.getVersion(), u.getUniversityId(), u.getDepartmentId(), u.getDepartmentLabel(), u.getBatchId(), u.getBatchLabel(), u.getFullName(), u.getEmail(), u.getPhone(), u.getAddress(), u.getStudentId(), u.getState(), u.getPhoneVerifiedAt(), u.getEmailVerifiedAt(), u.getCreatedAt(), u.getUpdatedAt()); }
   }
+  /** D-203/D-204 (A): phoneVerifiedAt/emailVerifiedAt are surfaced so a
+   *  reviewer can see which half of FR-AUTH-07 is done without opening the
+   *  student record; addressConflict is the Slice A evidence flag (D-196),
+   *  recomputed from the stored OCR texts at queue time (display-only). */
   public record VerificationRequestDto(Long id, Long version, Long userId, String status, String reason,
                                        String ocrText, String ocrTextBack, Double ocrMatchScore, String ocrStatus,
                                        LocalDateTime submittedAt, LocalDateTime decidedAt, Long decidedBy,
                                        LocalDateTime createdAt, String fullName, String email,
                                        String university, String studentId, Long previousAttempts,
-                                       Boolean duplicatePhone){
-    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrTextBack(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null, null); }
+                                       Boolean duplicatePhone, LocalDateTime phoneVerifiedAt,
+                                       LocalDateTime emailVerifiedAt, Boolean addressConflict){
+    public static VerificationRequestDto from(VerificationRequest r){ return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(), r.getOcrText(), r.getOcrTextBack(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(), r.getCreatedAt(), null, null, null, null, null, null, null, null, null); }
     /** Queue enrichment: applicant identity comes from the User row, not the request. */
     public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts){
       return from(r, u, universityName, previousAttempts, false);
@@ -27,10 +32,15 @@ public final class AdminDtos {
     /** Queue enrichment with the I-17 duplicate-phone flag (D-077): true when
      *  another account shares this applicant's phone number. */
     public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts, boolean duplicatePhone){
+      return from(r, u, universityName, previousAttempts, duplicatePhone, false);
+    }
+    /** Queue enrichment with the address-evidence flag (D-196/D-203). */
+    public static VerificationRequestDto from(VerificationRequest r, User u, String universityName, long previousAttempts, boolean duplicatePhone, boolean addressConflict){
       return new VerificationRequestDto(r.getId(), r.getVersion(), r.getUserId(), r.getStatus(), r.getReason(),
         r.getOcrText(), r.getOcrTextBack(), r.getOcrMatchScore(), r.getOcrStatus(), r.getSubmittedAt(), r.getDecidedAt(), r.getDecidedBy(),
         r.getCreatedAt(), u==null?null:u.getFullName(), u==null?null:u.getEmail(), universityName,
-        u==null?null:u.getStudentId(), previousAttempts, duplicatePhone);
+        u==null?null:u.getStudentId(), previousAttempts, duplicatePhone,
+        u==null?null:u.getPhoneVerifiedAt(), u==null?null:u.getEmailVerifiedAt(), addressConflict);
     }
   }
   public record IdentityChangeRequestDto(Long id, Long userId, String fullName, String email,
@@ -60,4 +70,23 @@ public final class AdminDtos {
                                 Boolean totpEnrolled, LocalDateTime createdAt, LocalDateTime updatedAt){
     public static AdminAccountDto from(AdminAccount a){ return new AdminAccountDto(a.getId(), a.getEmail(), a.getRole(), a.getUniversityId(), a.getActive(), a.getTotpEnrolled(), a.getCreatedAt(), a.getUpdatedAt()); }
   }
+  /** D-204 (B): one login-attempt row. Email, IP, success and timestamp
+   *  only — never passwords, OTPs or tokens (login_attempts carries none). */
+  public record LoginAttemptDto(Long id, String email, String ip, Boolean success, LocalDateTime createdAt){
+    public static LoginAttemptDto from(LoginAttempt a){ return new LoginAttemptDto(a.getId(), a.getEmail(), a.getIp(), a.getSuccess(), a.getCreatedAt()); }
+  }
+  /** D-204 (C): one row of the all-posts view — author, content, creation
+   *  time, moderation status and the count of ACTIVE reports against it
+   *  (unreported posts carry 0 and are listed too). */
+  public record AdminPostDto(Long id, Long authorId, String authorName, String authorEmail, String type,
+                             String visibility, String title, String body, String status,
+                             LocalDateTime createdAt, long reportCount){}
+  /** D-204: paginated admin list envelope (page is 0-based). */
+  public record PageResult<T>(java.util.List<T> content, int page, int size, long totalElements, int totalPages){}
+  /** D-204 (D): per-user activity — audit rows targeting the user plus
+   *  their login attempts (matched on the account email). */
+  public record UserActivityDto(AdminUserDto user, java.util.List<AuditLogDto> auditLogs,
+                                java.util.List<LoginAttemptDto> loginAttempts){}
+  /** D-204 (F): audit chain verification as surfaced to admins. */
+  public record AuditVerifyDto(boolean ok, Long brokenRowId, long totalRows, long verifiedRows, long legacyRows){}
 }

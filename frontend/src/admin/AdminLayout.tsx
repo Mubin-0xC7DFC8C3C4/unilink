@@ -125,6 +125,7 @@ export function AdminLayout() {
       { label: 'Appeals', to: '/admin/appeals', icon: I.appeals },
     ] },
     { label: 'Community Management', items: [
+      { label: 'All Posts', to: '/admin/posts', icon: I.posts },
       { label: 'Post Management', to: '/admin/moderation?view=posts', icon: I.posts },
       { label: 'Reports & Moderation', to: '/admin/moderation', icon: I.reports },
       { label: 'Announcements', to: '/admin/announcements', icon: I.announce },
@@ -139,6 +140,7 @@ export function AdminLayout() {
     ] },
     { label: 'Administration', items: [
       { label: 'Admin Users & Roles', to: '/admin/moderators', icon: I.roles, platformOnly: true },
+      { label: 'Login Activity', to: '/admin/login-activity', icon: I.logs },
       { label: 'Activity Logs', to: '/admin/audit', icon: I.logs },
       { label: 'Admin Settings', to: '/admin/settings', icon: '' },
     ] },

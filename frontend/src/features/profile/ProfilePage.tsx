@@ -2,7 +2,8 @@ import { useState } from 'react'; import { useParams, Link, useNavigate } from '
 import { apiGet, apiPost, apiDelete, errorMessage } from '../../api/client'; import { Skeleton, ErrorState, ApiUnavailable, Button, Modal } from '../../design/primitives';
 import { useAuth } from '../../app/auth';
 import { parseLinks } from './links';
-import type { UserProfile } from '../../api/types';
+import { LiveRepoViewer } from '../workspace/RepoViewer';
+import type { UserProfile, ProjectItem } from '../../api/types';
 /** Profile reads use /api/profiles/… (GET /profiles/me, GET /profiles/{id}),
  *  follow is POST/DELETE /profiles/{id}/follow, activity is
  *  GET /profiles/{id}/activity-items.
@@ -11,12 +12,16 @@ import type { UserProfile } from '../../api/types';
  *  line; below, a two-column body — About Me / Skills / Activity on the
  *  left, Links on the right. The page is a READ-ONLY showcase (owner
  *  instruction 2026-11-21): all editing lives in Settings → Edit Profile.
- *  D-202: the Education, Pinned Projects and Achievements sections were
- *  removed from this page (the portfolio manager in Settings and its
- *  endpoints are untouched). The uploaded cover is rendered from
- *  GET /profiles/{id}/cover, falling back to the solid banner. Every
- *  value shown comes from the profile DTO; fields the API does not carry
- *  (repository language/stars/forks, location) are not shown. */
+ *  D-202: the Education and Achievements sections were removed from this
+ *  page (the portfolio manager in Settings and its endpoints are
+ *  untouched). D-203 re-adds Pinned Projects — but ONLY for project rows
+ *  pinned to a real GitHub repository (githubOwner/githubRepo set); those
+ *  open in the LiveRepoViewer with real GitHub data, never the retired
+ *  fixture viewer. The section is hidden entirely when there is nothing
+ *  pinned. The uploaded cover is rendered from GET /profiles/{id}/cover,
+ *  falling back to the solid banner. Every value shown comes from the
+ *  profile DTO; fields the API does not carry (repository language/
+ *  stars/forks, location) are not shown. */
 const PF_CSS = `
 .pf-cover{height:148px;background:#E8E0C8;border-radius:var(--radius-md) var(--radius-md) 0 0}
 .pf-cover-img{display:block;width:100%;height:148px;object-fit:cover;border-radius:var(--radius-md) var(--radius-md) 0 0}
@@ -77,6 +82,14 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
   const cancelConn = useMutation({ mutationFn: ()=>apiPost(`/connections/requests/${connRequestId}/cancel`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
   const removeConn = useMutation({ mutationFn: ()=>apiDelete(`/connections/${uid}`), onSuccess: ()=>qc.invalidateQueries({queryKey:['connection-status', uid]}) });
   const activity = useQuery({ queryKey:['user-activity-items',id], queryFn: ()=>apiGet<any[]>(isMe?'/profiles/me/activity-items':`/profiles/${id}/activity-items`), retry:false, enabled: !!uid });
+  // D-203: pinned GitHub repositories. Own profile reads /profiles/me/
+  // projects (never /profiles/{numeric id}/projects); other profiles
+  // read /profiles/{id}/projects. Only rows with githubOwner+githubRepo
+  // are shown — manual free-text projects stay in Settings.
+  const [openPinned, setOpenPinned] = useState<ProjectItem | null>(null);
+  const projectsQ = useQuery({ queryKey:['user-projects',id], queryFn: ()=>apiGet<ProjectItem[]>(isMe?'/profiles/me/projects':`/profiles/${id}/projects`), retry:false, enabled: !!uid });
+  const pinned = (projectsQ.data ?? []).filter((p) => p.githubOwner && p.githubRepo);
+  const unpin = useMutation({ mutationFn: (pid: string|number)=>apiDelete(`/profiles/me/projects/${pid}/pin`), onSuccess: ()=>qc.invalidateQueries({queryKey:['user-projects',id]}) });
   const follow = useMutation({ mutationFn: ()=>apiPost(`/profiles/${id}/follow`,{}), onSuccess: ()=>qc.invalidateQueries({queryKey:['user',id]}) });
   const unfollow = useMutation({ mutationFn: ()=>apiDelete(`/profiles/${id}/follow`), onSuccess: ()=>qc.invalidateQueries({queryKey:['user',id]}) });
   const u = q.data||{} as UserProfile;
@@ -105,6 +118,19 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
     <div>
       <section className="pf-card"><h2>About Me</h2>{u.bio ? <p style={{margin:0}}>{u.bio}</p> : <p className="secondary" style={{margin:0}}>{isMe?'Add a short bio with Edit Profile.':'No bio yet.'}</p>}</section>
       <section className="pf-card"><h2>Skills</h2>{skills.length===0 ? <p className="secondary" style={{margin:0}}>No skills listed yet.</p> : <div className="pf-pills">{skills.map(s=><span key={s} className="pill">{s}</span>)}</div>}</section>
+      {pinned.length > 0 && <section className="pf-card"><h2>Pinned Projects</h2>
+        {pinned.map((p) => (
+          <div key={p.id} className="pf-proj">
+            <button type="button" className="pf-proj-btn" onClick={() => setOpenPinned(p)}>
+              <span className="pf-proj-top"><strong>{p.githubOwner} / {p.githubRepo}</strong><span className="pf-public">Public</span></span>
+              {p.description && <p>{p.description}</p>}
+              <span className="pf-proj-open">Open repository →</span>
+            </button>
+            {isMe && <Button disabled={unpin.isPending} onClick={() => unpin.mutate(p.id)}>Unpin</Button>}
+          </div>
+        ))}
+        {unpin.isError && <p role="alert" className="field-error">{errorMessage(unpin.error)}</p>}
+      </section>}
       <section className="pf-card"><h2>Activity</h2>
         {activity.isPending?<Skeleton/>:activity.isError?<ErrorState message={errorMessage(activity.error)} onRetry={()=>activity.refetch()}/>:(()=>{
           // Unified activity from the API: posts, comments and
@@ -140,5 +166,11 @@ export default function ProfilePage(){ const {id}=useParams(); const isMe = id==
     <p>Are you sure you want to sign out? You will need to log in again to access your account.</p>
     <div style={{display:'flex',gap:8,marginTop:14}}><Button onClick={()=>setSignOutOpen(false)}>Cancel</Button><Button variant="primary" onClick={doSignOut}>Sign out</Button></div>
   </Modal>}
+  {openPinned && <div className="pf-repo-backdrop" onClick={()=>setOpenPinned(null)}>
+    <div className="pf-repo-modal" role="dialog" aria-label={`${openPinned.githubOwner} / ${openPinned.githubRepo}`} onClick={(e)=>e.stopPropagation()}>
+      <button type="button" className="pf-repo-close" aria-label="Close repository" onClick={()=>setOpenPinned(null)}>×</button>
+      <LiveRepoViewer owner={openPinned.githubOwner!} name={openPinned.githubRepo!} />
+    </div>
+  </div>}
   </>}</div>;
 }

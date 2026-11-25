@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, apiGet, apiPost, errorMessage } from '../../api/client';
-import { Button, Field, Input, PageHeader, Skeleton, ErrorState, EmptyState } from '../../design/primitives';
+import { Button, PageHeader, Skeleton, ErrorState, EmptyState } from '../../design/primitives';
 import { ConfirmDialog, StatusBadge, Tabs, fmtDateTime } from '../adminUi';
 
 /**
@@ -10,12 +10,11 @@ import { ConfirmDialog, StatusBadge, Tabs, fmtDateTime } from '../adminUi';
  * every event; lifecycle runs through POST /admin/events/{id}/publish,
  * POST /admin/events/{id}/cancel and DELETE /admin/events/{id}; the
  * moderation PATCH (hide / remove / restore, deadline, visibility,
- * registration closed) is unchanged. Published events appear on the
- * student Events page immediately; drafts and cancelled events never
- * reach students.
+ * registration closed) is unchanged. Full editing lives on the edit
+ * page (/admin/events/{id}/edit, PUT /admin/events/{id}) which reuses
+ * the create form. Published events appear on the student Events page
+ * immediately; drafts and cancelled events never reach students.
  */
-const VISIBILITIES = ['DEPARTMENT', 'UNIVERSITY', 'DEPARTMENT_HUB', 'NATIONAL'] as const;
-
 function displayStatus(e: any, now: number): string {
   if (e.status === 'REMOVED') return 'REMOVED';
   if (e.status === 'HIDDEN_ADMIN') return 'HIDDEN';
@@ -31,9 +30,6 @@ export default function AdminEvents() {
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin-events'] });
   const [tab, setTab] = useState('ALL');
   const [selected, setSelected] = useState<any>(null);
-  const [editing, setEditing] = useState<any>(null);
-  const [deadline, setDeadline] = useState('');
-  const [visibility, setVisibility] = useState('UNIVERSITY');
   const [confirm, setConfirm] = useState<{ event: any; action: string; label: string } | null>(null);
 
   const q = useQuery({ queryKey: ['admin-events'], queryFn: () => apiGet<any[]>('/admin/events'), retry: false });
@@ -44,7 +40,7 @@ export default function AdminEvents() {
   });
   const patch = useMutation({
     mutationFn: ({ id, body }: { id: number; body: any }) => api(`/admin/events/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    onSuccess: () => { setEditing(null); setConfirm(null); refresh(); },
+    onSuccess: () => { setConfirm(null); refresh(); },
   });
   const lifecycle = useMutation({
     mutationFn: ({ id, action }: { id: number; action: 'publish' | 'cancel' | 'delete' }) =>
@@ -108,11 +104,11 @@ export default function AdminEvents() {
                   <td><StatusBadge status={e.displayStatus} /></td>
                   <td>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <Button onClick={() => { setSelected(e); setEditing(null); }}>View</Button>
+                      <Button onClick={() => { setSelected(e); }}>View</Button>
                       {e.displayStatus === 'DRAFT' && <Button onClick={() => setConfirm({ event: e, action: 'PUBLISH', label: 'Publish event' })}>Publish</Button>}
                       {e.displayStatus === 'PUBLISHED' && <Button onClick={() => setConfirm({ event: e, action: 'CANCEL', label: 'Cancel event' })}>Cancel event</Button>}
-                      {(e.displayStatus === 'PUBLISHED' || e.displayStatus === 'COMPLETED') && <>
-                        <Button onClick={() => { setEditing(e); setSelected(null); setDeadline(e.eventDeadline ? String(e.eventDeadline).slice(0, 16) : ''); setVisibility(e.visibility || 'UNIVERSITY'); }}>Edit</Button>
+                      {(e.displayStatus === 'PUBLISHED' || e.displayStatus === 'COMPLETED' || e.displayStatus === 'DRAFT') && <>
+                        <Link className="btn" to={`/admin/events/${e.id}/edit`}>Edit</Link>
                         <Button onClick={() => setConfirm({ event: e, action: 'HIDE', label: 'Hide event' })}>Hide</Button>
                         <Button onClick={() => setConfirm({ event: e, action: 'REMOVE', label: 'Remove event' })}>Remove</Button>
                       </>}
@@ -145,25 +141,6 @@ export default function AdminEvents() {
             <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
               <Button disabled={busy} onClick={() => patch.mutate({ id: selected.id, body: { registrationClosed: true } })}>Close registration</Button>
               <Button onClick={() => setSelected(null)}>Close</Button>
-            </div>
-            {patch.isError && <p role="alert" className="field-error">{errorMessage(patch.error)}</p>}
-          </section>
-        )}
-
-        {editing && (
-          <section className="card-group" style={{ marginTop: 20 }} aria-label="Edit event">
-            <h2 className="title">Edit — {editing.title}</h2>
-            <Field label="Registration deadline / start" htmlFor="ae-deadline">
-              <Input id="ae-deadline" type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-            </Field>
-            <Field label="Visibility" htmlFor="ae-visibility">
-              <select id="ae-visibility" className="input-search" style={{ width: '100%' }} value={visibility} onChange={(e) => setVisibility(e.target.value)}>
-                {VISIBILITIES.map((v) => <option key={v} value={v}>{v.replace('_', ' ')}</option>)}
-              </select>
-            </Field>
-            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <Button variant="primary" disabled={busy || !deadline} onClick={() => patch.mutate({ id: editing.id, body: { deadline: deadline.length === 16 ? `${deadline}:00` : deadline, visibility } })}>Save changes</Button>
-              <Button onClick={() => setEditing(null)}>Cancel</Button>
             </div>
             {patch.isError && <p role="alert" className="field-error">{errorMessage(patch.error)}</p>}
           </section>

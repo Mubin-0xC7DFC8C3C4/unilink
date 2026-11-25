@@ -10,4 +10,6 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
   Optional<AuditLog> findTopByOrderByIdDesc();
   List<AuditLog> findByActorAdminIdOrderByCreatedAtDesc(Long actorAdminId, Pageable pageable);
   long countByActorAdminId(Long actorAdminId);
+  /** D-204 (D): audit rows targeting one user, newest first, for the per-user activity view. */
+  List<AuditLog> findByTargetTypeAndTargetIdOrderByCreatedAtDesc(String targetType, Long targetId, Pageable pageable);
 }

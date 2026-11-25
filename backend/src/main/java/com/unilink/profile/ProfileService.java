@@ -36,13 +36,17 @@ public class ProfileService {
   private final CommentRepository profileComments; private final ReactionRepository profileReactions;
   private final com.unilink.notification.NotificationService profileNotifications;
   private final com.unilink.identity.service.OtpService otp;
+  private final com.unilink.workspace.GithubService github;
+  private final com.unilink.audit.AuditService audit;
   public ProfileService(UserRepository users, ProfileRepository profiles, ProjectRepository projects,
       EducationEntryRepository education, AchievementRepository achievements, UserSkillRepository userSkills,
       SkillRepository skills, FollowRepository follows, UserSectorFollowRepository sectorFollows,
       SectorTagRepository sectors, IdentityChangeRequestRepository changeRequests, AccessPolicy policy,
       PostRepository posts, FeedService feed,
       UniversityRepository universities, DepartmentRepository departments, BatchRepository batches,
-      StorageGateway storage, UploadValidator uploads, CommentRepository profileComments, ReactionRepository profileReactions, com.unilink.notification.NotificationService profileNotifications, com.unilink.identity.service.OtpService otp){
+      StorageGateway storage, UploadValidator uploads, CommentRepository profileComments, ReactionRepository profileReactions, com.unilink.notification.NotificationService profileNotifications, com.unilink.identity.service.OtpService otp,
+      com.unilink.workspace.GithubService github, com.unilink.audit.AuditService audit){
+    this.github=github; this.audit=audit;
     this.profileComments=profileComments; this.profileReactions=profileReactions; this.profileNotifications=profileNotifications;
     this.users=users; this.profiles=profiles; this.projects=projects; this.education=education; this.achievements=achievements;
     this.userSkills=userSkills; this.skills=skills; this.follows=follows; this.sectorFollows=sectorFollows;
@@ -84,6 +88,16 @@ public class ProfileService {
     if (links!=null){ if (links.contains("javascript:")) throw new Exceptions.BadRequest("BAD_LINK","Links must use http(s)"); p.setLinks(links); }
     if (phoneVisible!=null) p.setPhoneVisible(phoneVisible);
     profiles.save(p);
+    // D-204 (D): profile edits are audited (field names only — the actor
+    // is the student, so actorAdminId is null; the audit FK only allows
+    // admin ids. No IP is threaded through here: the D-202 controller
+    // contract passes no IP and its tests pin the call shape.)
+    List<String> fields = new ArrayList<>();
+    if (bio!=null) fields.add("bio");
+    if (headline!=null) fields.add("headline");
+    if (links!=null) fields.add("links");
+    if (phoneVisible!=null) fields.add("phoneVisible");
+    if (!fields.isEmpty()) audit.write(null, "PROFILE_UPDATED", "USER", userId, null, Map.of("fields", fields), null);
     // D-202: the response uses the real viewer — the old getProfile(userId,
     // null) reported isOwner=false and redacted the owner's own phone.
     return getProfile(userId, viewer);
@@ -102,6 +116,12 @@ public class ProfileService {
     }
     if (patch.phoneVisiblePresent()) p.setPhoneVisible(patch.phoneVisible()!=null && patch.phoneVisible());
     profiles.save(p);
+    List<String> fields = new ArrayList<>();
+    if (patch.bioPresent()) fields.add("bio");
+    if (patch.headlinePresent()) fields.add("headline");
+    if (patch.linksPresent()) fields.add("links");
+    if (patch.phoneVisiblePresent()) fields.add("phoneVisible");
+    if (!fields.isEmpty()) audit.write(null, "PROFILE_UPDATED", "USER", userId, null, Map.of("fields", fields), null);
     return getProfile(userId, viewer);
   }
   // ---- phone change (D-199): two-step, OTP re-verification of the NEW
@@ -159,6 +179,31 @@ public class ProfileService {
   }
   @Transactional public void deleteProject(Long userId, Long id){
     Project pr = projects.findByIdAndUserId(id, userId).orElseThrow(() -> new Exceptions.NotFound("Project")); projects.delete(pr);
+  }
+  /** D-203: Pin to Profile — link a project row to a GitHub repository.
+   *  Ownership is checked twice: the project row must belong to the caller
+   *  (findByIdAndUserId — a foreign id is a 404, never a leak), and the
+   *  repo must be one of the caller's own PUBLIC repos via the live GitHub
+   *  API (myRepos filters to public). The stored owner/name come from the
+   *  API match, so casing is GitHub's, not the caller's typing. Pinning
+   *  requires a GitHub connection (GITHUB_NOT_CONNECTED otherwise). */
+  @Transactional public ProfileDtos.ProjectDto pinProject(Long userId, Long projectId, String owner, String repo){
+    if (owner==null || owner.isBlank() || repo==null || repo.isBlank())
+      throw new Exceptions.BadRequest("REPO_REQUIRED","A GitHub repository (owner and name) is required");
+    if (!owner.matches("[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?") || !repo.matches("[A-Za-z0-9_.-]+"))
+      throw new Exceptions.BadRequest("INVALID_REPO","Not a valid GitHub repository name");
+    Project pr = projects.findByIdAndUserId(projectId, userId).orElseThrow(() -> new Exceptions.NotFound("Project"));
+    var match = github.myRepos(userId).stream()
+      .filter(r -> r.owner().equalsIgnoreCase(owner) && r.name().equalsIgnoreCase(repo)).findFirst()
+      .orElseThrow(() -> new Exceptions.BadRequest("REPO_NOT_OWNED","That repository is not one of your public GitHub repositories"));
+    pr.setGithubOwner(match.owner()); pr.setGithubRepo(match.name());
+    return ProfileDtos.ProjectDto.from(projects.save(pr));
+  }
+  /** D-203: unpin — clears the link; the project row itself stays. */
+  @Transactional public ProfileDtos.ProjectDto unpinProject(Long userId, Long projectId){
+    Project pr = projects.findByIdAndUserId(projectId, userId).orElseThrow(() -> new Exceptions.NotFound("Project"));
+    pr.setGithubOwner(null); pr.setGithubRepo(null);
+    return ProfileDtos.ProjectDto.from(projects.save(pr));
   }
   @Transactional public ProfileDtos.EducationEntryDto addEducation(Long userId, String inst, String degree, Integer year){
     // D-140: a null/blank institution used to persist a junk row with 200.
@@ -296,6 +341,8 @@ public class ProfileService {
     String key = storage.store("profile-photos", UploadValidator.sanitizeFileName(fileName), sniffed, stored);
     if (u.getProfilePhotoKey()!=null) storage.delete(u.getProfilePhotoKey());
     u.setProfilePhotoKey(key); users.save(u);
+    // D-204 (D): flag only — never image content or the storage key.
+    audit.write(null, "PROFILE_PHOTO_UPDATED", "USER", userId, null, Map.of("photo", true), null);
   }
   @Transactional
   public void uploadCover(Long userId, String fileName, String contentType, byte[] bytes){
@@ -306,6 +353,7 @@ public class ProfileService {
     String key = storage.store("profile-covers", UploadValidator.sanitizeFileName(fileName), sniffed, stored);
     if (p.getCoverKey()!=null) storage.delete(p.getCoverKey());
     p.setCoverKey(key); profiles.save(p);
+    audit.write(null, "PROFILE_COVER_UPDATED", "USER", userId, null, Map.of("cover", true), null);
   }
   @Transactional
   public void deletePhoto(Long userId){
@@ -316,6 +364,7 @@ public class ProfileService {
     // user can retry, instead of a dangling key pointing at a deleted file.
     storage.delete(key);
     u.setProfilePhotoKey(null); users.save(u);
+    audit.write(null, "PROFILE_PHOTO_REMOVED", "USER", userId, null, Map.of("photo", true), null);
   }
   @Transactional
   public void deleteCover(Long userId){
@@ -324,6 +373,7 @@ public class ProfileService {
     String key = p.getCoverKey();
     storage.delete(key);
     p.setCoverKey(null); profiles.save(p);
+    audit.write(null, "PROFILE_COVER_REMOVED", "USER", userId, null, Map.of("cover", true), null);
   }
   @Transactional(readOnly=true)
   public PhotoFile openPhoto(Long userId){

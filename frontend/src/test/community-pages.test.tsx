@@ -104,9 +104,64 @@ describe('Workspace', () => {
     expect(await screen.findByRole('button', { name: /campus-bus-tracker/ })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'View details' }));
     expect(await screen.findByText(/package\.json/)).toBeInTheDocument();
-    expect(screen.getByText('# Campus Bus Tracker')).toBeInTheDocument();
+    // D-203: the README is rendered as Markdown, not raw text.
+    expect(await screen.findByRole('heading', { name: 'Campus Bus Tracker' })).toBeInTheDocument();
+    expect(screen.getByText(/Default branch: main/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '← Back to Workspace' }));
     expect(await screen.findByText('Your GitHub Workspace')).toBeInTheDocument();
+  });
+
+  it('pins a repository to an existing project row (D-203)', async () => {
+    let pinned = false;
+    route = (url, method) => {
+      if (url === '/api/workspace/github/status') return json({ configured: true, connected: true, username: 'ayesha-dev', message: '' });
+      if (url === '/api/workspace/github/repos') return json([{ owner: 'ayesha-dev', name: 'campus-bus-tracker', fullName: 'ayesha-dev/campus-bus-tracker', description: 'Real-time campus bus tracking.', language: 'TypeScript', stars: 48, forks: 9 }]);
+      if (url === '/api/profiles/me/projects') return json(pinned
+        ? [{ id: 3, title: 'Bus Tracker App', description: 'Real-time campus bus tracking.', githubOwner: 'ayesha-dev', githubRepo: 'campus-bus-tracker' }]
+        : [{ id: 3, title: 'Bus Tracker App', description: 'Real-time campus bus tracking.', githubOwner: null, githubRepo: null }]);
+      if (url === '/api/profiles/me/projects/3/pin' && method === 'POST') { pinned = true; return json({ id: 3, title: 'Bus Tracker App', githubOwner: 'ayesha-dev', githubRepo: 'campus-bus-tracker' }); }
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderPage(<WorkspacePage />);
+    await user.click(await screen.findByRole('button', { name: 'Pin to Profile' }));
+    expect(await screen.findByText(/Pin ayesha-dev \/ campus-bus-tracker to your profile/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Bus Tracker App' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/profiles/me/projects/3/pin' && c.method === 'POST')).toBe(true));
+    expect(jsonBody(calls.find((c) => c.url === '/api/profiles/me/projects/3/pin')!)).toEqual({ owner: 'ayesha-dev', repo: 'campus-bus-tracker' });
+    expect(await screen.findByText('Pinned to profile')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pin to Profile' })).not.toBeInTheDocument();
+  });
+
+  it('pins a repository by creating a new project row (D-203)', async () => {
+    route = (url, method) => {
+      if (url === '/api/workspace/github/status') return json({ configured: true, connected: true, username: 'ayesha-dev', message: '' });
+      if (url === '/api/workspace/github/repos') return json([{ owner: 'ayesha-dev', name: 'campus-bus-tracker', fullName: 'ayesha-dev/campus-bus-tracker', description: 'Real-time campus bus tracking.', language: 'TypeScript', stars: 48, forks: 9 }]);
+      if (url === '/api/profiles/me/projects' && method === 'POST') return json({ id: 9, title: 'campus-bus-tracker', githubOwner: null, githubRepo: null });
+      if (url === '/api/profiles/me/projects') return json([]);
+      if (url === '/api/profiles/me/projects/9/pin' && method === 'POST') return json({ id: 9, title: 'campus-bus-tracker', githubOwner: 'ayesha-dev', githubRepo: 'campus-bus-tracker' });
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    renderPage(<WorkspacePage />);
+    await user.click(await screen.findByRole('button', { name: 'Pin to Profile' }));
+    await user.click(await screen.findByRole('button', { name: 'New project “campus-bus-tracker”' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/profiles/me/projects' && c.method === 'POST')).toBe(true));
+    expect(jsonBody(calls.find((c) => c.url === '/api/profiles/me/projects' && c.method === 'POST')!)).toEqual({ title: 'campus-bus-tracker', description: 'Real-time campus bus tracking.', url: 'https://github.com/ayesha-dev/campus-bus-tracker' });
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/profiles/me/projects/9/pin' && c.method === 'POST')).toBe(true));
+  });
+
+  it('links out to GitHub to create a project (D-203)', async () => {
+    route = (url) => {
+      if (url === '/api/workspace/github/status') return json({ configured: true, connected: true, username: 'ayesha-dev', message: '' });
+      if (url === '/api/workspace/github/repos') return json([]);
+      if (url === '/api/profiles/me/projects') return json([]);
+      return defaultRoute(url);
+    };
+    renderPage(<WorkspacePage />);
+    const link = await screen.findByRole('link', { name: /Create Project on GitHub/ });
+    expect(link.getAttribute('href')).toBe('https://github.com/new');
+    expect(link.getAttribute('target')).toBe('_blank');
   });
 });
 
@@ -125,9 +180,12 @@ describe('Student Profile — sign out (D-202)', () => {
       <Route path="/profile/:id" element={<ProfilePage />} />
       <Route path="/login" element={<div>LOGIN PAGE</div>} />
     </Routes></MemoryRouter></AuthProvider></QueryClientProvider>);
-    // D-202: the Pinned Projects / Education / Achievements sections were
-    // removed from the profile page (the portfolio manager in Settings
-    // stays) — the page must not fetch those lists or render them.
+    // D-202: the Education / Achievements sections were removed from
+    // the profile page (the portfolio manager in Settings stays) — the
+    // page must not fetch those lists or render them. D-203 re-adds
+    // Pinned Projects, but ONLY when a project row is pinned to a real
+    // GitHub repository; with nothing pinned the section stays hidden
+    // (and the page reads /profiles/me/projects, never /profiles/5).
     await screen.findByText('Ayesha Rahman');
     expect(screen.queryByText('Pinned Projects')).toBeNull();
     expect(screen.queryByText('Education')).toBeNull();
@@ -142,5 +200,39 @@ describe('Student Profile — sign out (D-202)', () => {
     await user.click(within(confirm).getByRole('button', { name: 'Sign out' }));
     expect(await screen.findByText('LOGIN PAGE')).toBeInTheDocument();
     expect(calls.some((c) => c.url === '/api/auth/logout' && c.method === 'POST')).toBe(true);
+  });
+
+  it('shows Pinned Projects for GitHub-pinned rows and opens the live viewer (D-203)', async () => {
+    route = (url, method) => {
+      if (url === '/api/auth/me') return json({ id: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED' });
+      if (url === '/api/profiles/me') return json({ userId: 5, fullName: 'Ayesha Rahman', state: 'VERIFIED', departmentName: 'CSE', universityName: 'Metropolitan University', followers: 96, following: 128, skills: [] });
+      if (url === '/api/profiles/me/activity-items') return json([]);
+      if (url === '/api/profiles/me/projects') return json([
+        { id: 7, title: 'Bus Tracker', description: 'Real-time campus bus tracking.', githubOwner: 'ayesha-dev', githubRepo: 'campus-bus-tracker' },
+        { id: 8, title: 'Draft notes', description: 'Not pinned yet.', githubOwner: null, githubRepo: null },
+      ]);
+      if (url === '/api/workspace/github/repos/ayesha-dev/campus-bus-tracker') return json({ repo: { owner: 'ayesha-dev', name: 'campus-bus-tracker', fullName: 'ayesha-dev/campus-bus-tracker', description: 'Real-time campus bus tracking.', language: 'TypeScript', stars: 48, forks: 9, htmlUrl: 'https://github.com/ayesha-dev/campus-bus-tracker', defaultBranch: 'develop' }, readme: '# Campus Bus Tracker', myUsername: 'ayesha-dev' });
+      if (url.startsWith('/api/workspace/github/repos/ayesha-dev/campus-bus-tracker/contents')) return json([{ name: 'package.json', path: 'package.json', type: 'file', size: 512 }]);
+      if (url.startsWith('/api/workspace/discussions')) return json([]);
+      return defaultRoute(url);
+    };
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><AuthProvider><MemoryRouter initialEntries={['/profile/me']}><Routes>
+      <Route path="/profile/:id" element={<ProfilePage />} />
+      <Route path="/login" element={<div>LOGIN PAGE</div>} />
+    </Routes></MemoryRouter></AuthProvider></QueryClientProvider>);
+    expect(await screen.findByText('Pinned Projects')).toBeInTheDocument();
+    expect(screen.getByText('ayesha-dev / campus-bus-tracker')).toBeInTheDocument();
+    // The unpinned free-text project is not shown in this section.
+    expect(screen.queryByText('Draft notes')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /ayesha-dev \/ campus-bus-tracker/ }));
+    // Live viewer with real GitHub data: default branch from the API,
+    // README as Markdown, no fixture content.
+    expect(await screen.findByText('⎇ develop')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Campus Bus Tracker' })).toBeInTheDocument();
+    expect(await screen.findByText(/package\.json/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close repository' }));
+    expect(await screen.findByText('Pinned Projects')).toBeInTheDocument();
   });
 });

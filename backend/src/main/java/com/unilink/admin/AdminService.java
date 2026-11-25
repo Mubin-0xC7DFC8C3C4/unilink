@@ -5,11 +5,14 @@ import com.unilink.community.FeedService;
 import com.unilink.config.AppProperties;
 import com.unilink.identity.domain.*; import com.unilink.identity.dto.CatalogDtos.*;
 import com.unilink.identity.repo.*;
+import com.unilink.identity.service.IdCardMatcher;
 import com.unilink.identity.service.SessionService;
 import com.unilink.integration.email.EmailProvider;
 import com.unilink.moderation.ModerationDtos.*;
 import com.unilink.moderation.ModerationService;
 import com.unilink.security.AccessPolicy; import com.unilink.security.Principals;
+import org.springframework.data.domain.Page; import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort; import org.springframework.data.jpa.domain.Specification;
 import org.springframework.jdbc.core.JdbcTemplate; import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service; import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime; import java.util.*;
@@ -32,6 +35,7 @@ public class AdminService {
   private final IdentityChangeRequestRepository changeRequests;
   private final PostSectorTagRepository postSectors; private final EventResponseRepository eventResponses;
   private final com.unilink.notification.NotificationService notifications;
+  private final LoginAttemptRepository loginAttempts;
   public AdminService(UserRepository users, VerificationRequestRepository requests, ReportRepository reports,
       PostRepository posts, CommentRepository comments, AdminAccountRepository admins, AuditLogRepository auditLogs,
       AnnouncementRepository announcements, UniversityRepository universities, DepartmentRepository departments,
@@ -43,8 +47,10 @@ public class AdminService {
       EventDetailRepository eventDetails, FeedService feed,
       ModerationService moderation, EmailProvider email, AppProperties props,
       IdentityChangeRequestRepository changeRequests, PostSectorTagRepository postSectors,
-      EventResponseRepository eventResponses, com.unilink.notification.NotificationService notifications){
+      EventResponseRepository eventResponses, com.unilink.notification.NotificationService notifications,
+      LoginAttemptRepository loginAttempts){
     this.postSectors=postSectors; this.eventResponses=eventResponses; this.notifications=notifications;
+    this.loginAttempts=loginAttempts;
     this.users=users; this.requests=requests; this.reports=reports; this.posts=posts; this.comments=comments;
     this.admins=admins; this.auditLogs=auditLogs; this.announcements=announcements; this.universities=universities;
     this.departments=departments; this.catalogs=catalogs; this.aliases=aliases; this.batches=batches; this.sectors=sectors;
@@ -82,11 +88,23 @@ public class AdminService {
 
   @Transactional(readOnly=true)
   public List<VerificationRequestDto> verificationQueue(Principals.AdminPrincipal admin, String status){
+    return verificationQueue(admin, status, null);
+  }
+  /** D-204 (A): ocrStatus filters the queue by the OCR outcome
+   *  (AUTO_VERIFIED / VERIFICATION_FAILED / MANUAL_REVIEW) — the value was
+   *  in the DTO but never filterable or displayed. */
+  @Transactional(readOnly=true)
+  public List<VerificationRequestDto> verificationQueue(Principals.AdminPrincipal admin, String status, String ocrStatus){
     List<VerificationRequest> all;
     if (status==null || status.isBlank()) all = requests.findAllByOrderBySubmittedAtAsc();
     else if ("PENDING_REVIEW".equals(status) || "APPROVED".equals(status) || "REJECTED".equals(status))
       all = requests.findByStatusOrderBySubmittedAtAsc(status);
     else throw new Exceptions.BadRequest("INVALID_STATUS", "Unknown verification status: " + status);
+    if (ocrStatus!=null && !ocrStatus.isBlank()){
+      if (!List.of("AUTO_VERIFIED","VERIFICATION_FAILED","MANUAL_REVIEW").contains(ocrStatus))
+        throw new Exceptions.BadRequest("INVALID_OCR_STATUS", "Unknown OCR status: " + ocrStatus);
+      all = all.stream().filter(r -> ocrStatus.equals(r.getOcrStatus())).toList();
+    }
     if (!"PLATFORM_ADMIN".equals(admin.role())){
       Set<Long> mine = new HashSet<>();
       users.findByUniversityId(admin.universityId()).forEach(u -> mine.add(u.getId()));
@@ -106,8 +124,80 @@ public class AdminService {
       // attempts the user ever made. I-17: flag duplicate phones (D-077).
       boolean duplicatePhone = u!=null && u.getPhone()!=null
         && users.findByPhone(u.getPhone()).stream().anyMatch(o -> !o.getId().equals(u.getId()));
-      return VerificationRequestDto.from(r, u, uni, attempts.countByVerificationRequestId(r.getId()), duplicatePhone);
+      // D-203: the Slice A address-evidence flag, recomputed from the
+      // stored OCR texts (display-only; never a decision driver).
+      boolean addressConflict = IdCardMatcher.addressConflictFor(r.getOcrText(), r.getOcrTextBack(),
+        u==null?null:u.getAddress());
+      return VerificationRequestDto.from(r, u, uni, attempts.countByVerificationRequestId(r.getId()), duplicatePhone, addressConflict);
     }).toList();
+  }
+  /** D-204 (B): Login Activity — the login_attempts rows AuthService
+   *  already writes, newest first, paginated. Platform Admins see every
+   *  row; moderators see only attempts for accounts of their university
+   *  (matched on email — the rows carry no user id, by design, and no
+   *  schema change is made). No passwords, OTPs or tokens are involved. */
+  @Transactional(readOnly=true)
+  public PageResult<LoginAttemptDto> loginAttempts(Principals.AdminPrincipal admin, int page, int size){
+    PageRequest pr = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100));
+    Page<LoginAttempt> p;
+    if ("PLATFORM_ADMIN".equals(admin.role())) p = loginAttempts.findAllByOrderByCreatedAtDesc(pr);
+    else {
+      List<String> emails = users.findByUniversityId(admin.universityId()).stream().map(User::getEmail).toList();
+      p = emails.isEmpty() ? Page.empty(pr) : loginAttempts.findByEmailInOrderByCreatedAtDesc(emails, pr);
+    }
+    return new PageResult<>(p.getContent().stream().map(LoginAttemptDto::from).toList(),
+      p.getNumber(), p.getSize(), p.getTotalElements(), p.getTotalPages());
+  }
+  /** D-204 (C): all posts, not just reported ones — author, content,
+   *  creation time, moderation status and ACTIVE report counts, newest
+   *  first, paginated. Moderators see a post when its author belongs to
+   *  their university or its scope is their university (D-032). */
+  @Transactional(readOnly=true)
+  public PageResult<AdminPostDto> allPosts(Principals.AdminPrincipal admin, int page, int size){
+    PageRequest pr = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100),
+      Sort.by(Sort.Direction.DESC, "createdAt"));
+    Specification<Post> spec = (root, query, cb) -> {
+      if ("PLATFORM_ADMIN".equals(admin.role())) return cb.conjunction();
+      Long uni = admin.universityId();
+      jakarta.persistence.criteria.Subquery<Long> mine = query.subquery(Long.class);
+      jakarta.persistence.criteria.Root<User> u = mine.from(User.class);
+      mine.select(u.get("id")).where(cb.equal(u.get("universityId"), uni));
+      return cb.or(cb.equal(root.get("scopeUniversityId"), uni), root.get("authorId").in(mine));
+    };
+    Page<Post> p = posts.findAll(spec, pr);
+    List<AdminPostDto> rows = p.getContent().stream().map(post -> {
+      User a = post.getAuthorId()==null ? null : users.findById(post.getAuthorId()).orElse(null);
+      return new AdminPostDto(post.getId(), post.getAuthorId(), a==null?null:a.getFullName(), a==null?null:a.getEmail(),
+        post.getType(), post.getVisibility(), post.getTitle(), post.getBody(), post.getStatus(),
+        post.getCreatedAt(), countActiveReports(post.getId()));
+    }).toList();
+    return new PageResult<>(rows, p.getNumber(), p.getSize(), p.getTotalElements(), p.getTotalPages());
+  }
+  private long countActiveReports(Long postId){
+    long n = 0;
+    for (String t : List.of("POST","EVENT"))
+      n += reports.findByTargetTypeAndTargetId(t, postId).stream().filter(r -> "ACTIVE".equals(r.getStatus())).count();
+    return n;
+  }
+  /** D-204 (D): per-user activity — the audit rows targeting this user
+   *  (including their profile/photo/cover updates) plus their login
+   *  attempts, newest first. Scope-checked like getUser (404 out of scope). */
+  @Transactional(readOnly=true)
+  public UserActivityDto userActivity(Principals.AdminPrincipal admin, Long userId){
+    User u = loadUser(admin, userId);
+    List<AuditLogDto> logs = auditLogs.findByTargetTypeAndTargetIdOrderByCreatedAtDesc("USER", userId, PageRequest.of(0, 50))
+      .stream().map(AuditLogDto::from).toList();
+    List<LoginAttemptDto> attempts = u.getEmail()==null ? List.of()
+      : loginAttempts.findByEmailOrderByCreatedAtDesc(u.getEmail(), PageRequest.of(0, 50))
+        .stream().map(LoginAttemptDto::from).toList();
+    return new UserActivityDto(AdminUserDto.from(u), logs, attempts);
+  }
+  /** D-204 (F): audit chain verification surfaced to admins — the counts
+   *  and first broken row id only, no row contents. */
+  @Transactional(readOnly=true)
+  public AuditVerifyDto auditVerify(Principals.AdminPrincipal admin){
+    var v = audit.verifyDetailed();
+    return new AuditVerifyDto(v.ok(), v.brokenRowId(), v.totalRows(), v.verifiedRows(), v.legacyRows());
   }
   // ---- identity-change requests (FR-PROF-09, D-017): admin decide path ----
   /** Pending identity-change requests, scoped like the verification queue:
@@ -564,6 +654,13 @@ public class AdminService {
   }
   @Transactional
   public AdminAccountDto updateModerator(Principals.AdminPrincipal admin, Long id, String email, Long universityId, Boolean active){
+    return updateModerator(admin, id, email, universityId, active, null);
+  }
+  /** D-204 (F): the moderator edit now writes its audit row (it was the
+   *  one moderator-management write without one). The 5-arg form stays
+   *  for callers without a request IP. */
+  @Transactional
+  public AdminAccountDto updateModerator(Principals.AdminPrincipal admin, Long id, String email, Long universityId, Boolean active, String ip){
     policy.requirePlatformAdmin(admin);
     AdminAccount a = admins.findById(id).orElseThrow(() -> new Exceptions.NotFound("Admin"));
     if (email!=null && (email.isBlank() || !email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")))
@@ -579,6 +676,11 @@ public class AdminService {
     if (universityId!=null) a.setUniversityId(universityId);
     if (active!=null) a.setActive(active);
     admins.save(a);
+    Map<String,Object> changed = new LinkedHashMap<>();
+    if (email!=null && !email.isBlank()) changed.put("email", email);
+    if (universityId!=null) changed.put("universityId", universityId);
+    if (active!=null) changed.put("active", active);
+    audit.write(admin.adminId(), "MODERATOR_UPDATE", "ADMIN", id, null, changed, ip);
     return AdminAccountDto.from(a);
   }
   public record ResetCredentialsResult(AdminAccountDto admin, String temporaryPassword) {}
